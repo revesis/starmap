@@ -1,0 +1,12 @@
+{
+  "name": "starmap",
+  "version": "0.1.0",
+  "description": "把当前目录的代码渲染成一片星云：文件是粒子，调用/依赖关系是粒子弦。",
+  "bin": {
+    "starmap": "./bin/cli.js"
+  },
+  "scripts": {
+    "start": "node bin/cli.js"
+  },
+  "license": "MIT"
+}
