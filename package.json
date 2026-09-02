@@ -5,8 +5,30 @@
   "bin": {
     "starmap": "./bin/cli.js"
   },
+  "files": [
+    "bin",
+    "src",
+    "public",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node bin/cli.js"
   },
-  "license": "MIT"
+  "keywords": [
+    "codebase-visualization",
+    "dependency-graph",
+    "canvas",
+    "git"
+  ],
+  "author": "revesis",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/revesis/starmap.git"
+  },
+  "homepage": "https://github.com/revesis/starmap",
+  "engines": {
+    "node": ">=16"
+  }
 }
