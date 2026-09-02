@@ -934,6 +934,9 @@
   // 双手同时握拳=抓住画布，开合=缩放/连线角度变化=旋转/双手一起移动=平移，三者同时生效，松开任一只手=停止；
   // 拇指食指捏合=选中该处最近的粒子。
   let twoHandGrabStart = null; // { dist, angle, scale, rotation }，双手抓取手势开始时的基准状态
+  let lastPinchId = null; // 上一次捏合命中的粒子 id，用于判定"双击"
+  let lastPinchTime = 0;
+  const DOUBLE_PINCH_WINDOW = 450; // 两次捏合间隔小于这个值(ms)才算双击
   handToggleEl.addEventListener('click', async () => {
     if (!handsEnabled) {
       handToggleEl.textContent = '…启动摄像头';
@@ -973,8 +976,23 @@
             if (state === 'idle') twoHandGrabStart = null;
           },
           onPinch: (xNorm, yNorm) => {
+            // 单次捏合太容易误触，先只轻量高亮；短时间内对同一个粒子再捏一次（双击）才真正打开详情面板
             const hit = pickNode(xNorm * cssW, yNorm * cssH);
-            if (hit) selectNode(hit);
+            if (!hit) {
+              lastPinchId = null;
+              return;
+            }
+            const now = performance.now();
+            const isDoublePinch = hit.id === lastPinchId && now - lastPinchTime < DOUBLE_PINCH_WINDOW;
+            if (isDoublePinch) {
+              selectNode(hit);
+              lastPinchId = null;
+            } else {
+              selectedId = hit.id;
+              if (audioEnabled) window.CosmosAudio && window.CosmosAudio.pluck(hit);
+              lastPinchId = hit.id;
+              lastPinchTime = now;
+            }
           },
         });
         handsEnabled = true;
