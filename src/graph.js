@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-// 扩展名 -> 颜色（粒子的“元素”色）
+// extension -> color (the particle's "element" color)
 const COLOR_TABLE = {
   '.js': '#f7df1e',
   '.jsx': '#f7df1e',
@@ -40,13 +40,14 @@ const DEFAULT_COLOR = '#7a7a7a';
 const RESOLVABLE_EXT = ['', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.json', '.py'];
 const INDEX_NAMES = ['index.js', 'index.ts', 'index.jsx', 'index.tsx', '__init__.py'];
 
-// 各语言里“引用别的文件”的写法，全部只抓相对路径 import（跳过第三方包/标准库）
+// "reference another file" syntax across languages — only matches relative-path
+// imports (skips third-party packages / stdlib)
 const IMPORT_PATTERNS = [
   /\bimport\s+(?:[^'"]+?\s+from\s+)?['"](\.[^'"]+)['"]/g, // import x from './y'
   /\brequire\(\s*['"](\.[^'"]+)['"]\s*\)/g, // require('./y')
   /\bimport\(\s*['"](\.[^'"]+)['"]\s*\)/g, // dynamic import('./y')
   /^\s*from\s+(\.+[\w.]*)\s+import\b/gm, // python: from .y import z
-  /^\s*import\s+(\.+[\w.]+)/gm, // python: import .y (少见但保留)
+  /^\s*import\s+(\.+[\w.]+)/gm, // python: import .y (rare but handled)
 ];
 
 function extractRelativeImports(content) {
@@ -63,7 +64,7 @@ function extractRelativeImports(content) {
 
 function resolveImport(fromRel, spec, fileSet) {
   const fromDir = path.posix.dirname(fromRel);
-  // python 风格的点号相对导入，转成路径分隔
+  // Python-style dotted relative import, convert to a path separator
   let normSpec = spec;
   if (/^\.+[\w.]*$/.test(spec) && !spec.includes('/')) {
     const dots = spec.match(/^\.+/)[0].length;
@@ -96,7 +97,7 @@ function isProbablyBinary(content) {
   return content.indexOf(String.fromCharCode(0)) !== -1;
 }
 
-// 熵：用文件被提交触碰的次数（churn）来近似"这个文件有多混乱/多常变"
+// Entropy: approximate "how chaotic/often-changed is this file" using its commit churn count
 function computeChurn(rootDir) {
   try {
     const out = execFileSync(
@@ -171,8 +172,8 @@ function build(rootDir, files, gitRepo) {
   const maxDegree = Math.max(1, ...nodes.map((n) => n.degree));
   const maxChurn = Math.max(1, ...nodes.map((n) => n.churn));
   for (const n of nodes) {
-    n.intensity = Math.round((n.degree / maxDegree) * 100) / 100; // 0..1，颜色深浅（引力质量的一部分）
-    n.entropy = Math.round((n.churn / maxChurn) * 100) / 100; // 0..1，改动越频繁越"热"越无序
+    n.intensity = Math.round((n.degree / maxDegree) * 100) / 100; // 0..1, color depth (also part of gravity mass)
+    n.entropy = Math.round((n.churn / maxChurn) * 100) / 100; // 0..1, the more often it changes the "hotter"/more chaotic
   }
 
   return { nodes, edges, maxDegree };

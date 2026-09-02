@@ -1,41 +1,43 @@
 # Starmap 🌌
 
-把当前目录的代码渲染成一片星云：每个文件是一颗粒子，文件间的依赖关系是连接粒子的"弦"，
-按顶层目录聚成不同的星云团。用 Canvas 绘制，浏览器打开即可，适合在没有 GUI 的机器上跑。
+Renders the current directory's code as a particle cosmos: every file is a particle,
+dependencies between files are "strings" connecting them, clustered into nebulae by
+top-level directory. Drawn with Canvas — just open it in a browser, so it works fine
+on a machine with no GUI.
 
-## 用法
+## Usage
 
 ```bash
-node bin/cli.js [目录] [--port 4550] [--https]
+node bin/cli.js [dir] [--port 4550] [--https]
 ```
 
-启动后终端会打印一个 `http://localhost:4550` 链接，用浏览器打开即可。
+Once started, the terminal prints an `http://localhost:4550` link — open it in a browser.
 
-- 滚轮缩放，拖拽空白处平移画布；触屏设备支持单指拖拽/点选、双指缩放
-- 拖动某个粒子可以把它固定住
-- 点击粒子：右侧面板显示文件信息；如果目录是 git 仓库，会展示该文件的未提交 diff 和最近提交记录；不是 git 仓库则展示文件内容预览
-- HUD 里可以开启音乐（点击拨弦音效 + 熵驱动的环境底噪 + 有限声部的持续环境声场）和摄像头手势（单手平移、双手缩放、捏合选中）
-- **局域网/手机访问要加 `--https`**：摄像头（`getUserMedia`）只在安全上下文里可用，即 `https://` 或 `http://localhost`。用局域网 IP 从手机等设备访问时必须加 `--https`（需要系统装有 `openssl`，会生成一份自签名证书缓存在 `~/.cache/starmap/`，浏览器会提示"不安全"，选择继续访问即可）；纯本机 `localhost` 访问不受影响，不加这个参数摄像头也能用。
+- Scroll to zoom, drag empty space to pan the canvas; touch devices support one-finger drag/tap and two-finger zoom
+- Drag a particle to pin it in place
+- Click a particle: the side panel shows file info; if the directory is a git repo it shows that file's uncommitted diff and recent commit history; otherwise it shows a file content preview
+- The HUD lets you turn on music (click-to-pluck sound effects + an entropy-driven ambient noise floor + a bounded-voice ambient sound field) and camera gestures (one-hand pan, two-hand zoom/rotate, pinch to select)
+- **Add `--https` for LAN/mobile access**: the camera (`getUserMedia`) only works in a secure context — `https://` or `http://localhost`. Accessing via a LAN IP from a phone or other device requires `--https` (needs `openssl` installed on the system; it generates a self-signed cert cached in `~/.cache/starmap/`, and the browser will warn it's "not secure" — just choose to continue). Plain `localhost` access is unaffected; the camera works fine without this flag in that case.
 
-## 视觉映射规则
+## Visual mapping rules
 
-| 维度 | 映射 |
+| Dimension | Mapping |
 | --- | --- |
-| 粒子半径 | 与文件大小线性映射（限制在一个可视范围内，避免超大文件把画布撑爆） |
-| 粒子颜色 | 按文件扩展名查表（`src/graph.js` 里的 `COLOR_TABLE`） |
-| 颜色深浅 | 与该文件的调用度（入度+出度）正线性相关，调用越多越亮 |
-| 星云分组 | 按文件所在的顶层目录聚类 |
-| 忽略规则 | 直接复用 `git ls-files --others --exclude-standard`，git 忽略的文件这里也会忽略；非 git 目录时退化为跳过 `node_modules`/`.git` 等 |
+| Particle radius | Linear mapping to file size (clamped to a visible range so huge files don't blow up the canvas) |
+| Particle color | Looked up by file extension (the `COLOR_TABLE` in `src/graph.js`) |
+| Color depth | Linearly correlated with the file's degree (in + out edges) — the more it's called, the brighter |
+| Nebula grouping | Clustered by the file's top-level directory |
+| Ignore rules | Directly reuses `git ls-files --others --exclude-standard`, so anything git-ignored is ignored here too; falls back to skipping `node_modules`/`.git` etc. in non-git directories |
 
-## 当前范围（MVP）
+## Current scope (MVP)
 
-- 依赖关系目前只做**相对路径 import/require**（JS/JSX/TS/TSX/MJS/CJS/Python），
-  不解析 `node_modules`/第三方包，也不是真正的函数级调用图。
-- diff/log 通过本地 shell 出 `git diff` / `git log`，只在目录是 git 仓库时可用。
-- 大目录（几千文件）用了网格近似做粒子间斥力，避免 O(n²)，但没有做视口裁剪之外的进一步优化（比如 WebGL），文件数极多时可能仍会掉帧。
+- Dependency resolution currently only handles **relative-path import/require** (JS/JSX/TS/TSX/MJS/CJS/Python);
+  it doesn't resolve `node_modules`/third-party packages, and it isn't a real function-level call graph.
+- Diff/log come from shelling out to `git diff` / `git log` locally, and only work when the directory is a git repo.
+- Large directories (thousands of files) use a grid approximation for inter-particle repulsion to avoid O(n²), but there's no further optimization beyond viewport culling (e.g. WebGL), so very large file counts may still drop frames.
 
-## 后续可以加的方向
+## Possible future directions
 
-- 针对某个主力语言接入 tree-sitter，做真正的函数调用图（成本更高，按需再加）
-- 文件数过大时切到 WebGL 渲染
-- 点击粒子时高亮它的整条依赖链
+- Wire up tree-sitter for a primary language to get a real function-call graph (more expensive, add if needed)
+- Switch to WebGL rendering once file counts get too large
+- Highlight a particle's full dependency chain when it's clicked

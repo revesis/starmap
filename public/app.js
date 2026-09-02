@@ -16,13 +16,13 @@
   const handPreviewEl = document.getElementById('handPreview');
   const handCanvasEl = document.getElementById('handCanvas');
   let handsEnabled = false;
-  let handCursor = null; // { x, y } 归一化 0..1，来自摄像头手部识别
-  let handLandmarks = []; // 每只手 21 个关键点（已镜像，归一化 0..1），画在主画布上
+  let handCursor = null; // { x, y } normalized 0..1, from camera hand tracking
+  let handLandmarks = []; // 21 key points per hand (mirrored, normalized 0..1), drawn on the main canvas
 
   let audioEnabled = false;
   let avgEntropy = 0;
 
-  // ---- 移动端引导：触屏设备提示横屏 + 全屏 ----
+  // ---- Mobile onboarding: prompt touch devices to go landscape + fullscreen ----
   (function setupMobileGate() {
     const gate = document.getElementById('mobileGate');
     if (!gate) return;
@@ -38,12 +38,12 @@
         if (el.requestFullscreen) await el.requestFullscreen();
         else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
       } catch {
-        // 部分浏览器（如 iOS Safari）不支持全屏 API，忽略即可
+        // some browsers (e.g. iOS Safari) don't support the Fullscreen API — safe to ignore
       }
       try {
         if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape');
       } catch {
-        // 部分浏览器不支持锁定横屏，忽略即可
+        // some browsers don't support locking orientation — safe to ignore
       }
       hide();
     });
@@ -54,8 +54,8 @@
   let gitRepo = false;
   let nodeById = new Map();
 
-  // 视图变换：世界坐标 <-> 屏幕坐标（CSS 像素空间，和鼠标事件、canvas 尺寸单位保持一致）
-  // rotation：视角旋转角度（弧度），0 = 正常朝向
+  // View transform: world coords <-> screen coords (CSS pixel space, matching mouse events and canvas size units)
+  // rotation: view rotation angle (radians), 0 = normal orientation
   const view = { x: 0, y: 0, scale: 1, rotation: 0 };
   let cssW = window.innerWidth;
   let cssH = window.innerHeight;
@@ -85,12 +85,13 @@
     const dy = (sy - cssH / 2) / view.scale;
     const cos = Math.cos(view.rotation);
     const sin = Math.sin(view.rotation);
-    // 逆旋转（旋转 -rotation）
+    // inverse rotation (rotate by -rotation)
     const rx = dx * cos + dy * sin;
     const ry = -dx * sin + dy * cos;
     return [rx + view.x, ry + view.y];
   }
-  // 把一段"屏幕像素位移"换算成对应的世界坐标位移，用于拖拽平移（考虑旋转）
+  // Convert a "screen pixel offset" into the corresponding world-coordinate offset,
+  // used for drag-panning (accounts for rotation)
   function screenDeltaToWorld(ddx, ddy) {
     const cos = Math.cos(view.rotation);
     const sin = Math.sin(view.rotation);
@@ -100,7 +101,7 @@
     ];
   }
 
-  // ---- 布局：按目录分成"星云"团簇，簇内力导向 ----
+  // ---- Layout: cluster into per-directory "nebulae", force-directed within each cluster ----
   function initLayout() {
     const dirs = [...new Set(nodes.map((n) => n.dir))];
     const clusterCenters = new Map();
@@ -121,14 +122,14 @@
       n.cy = c.y;
       n.fixed = false;
       n.phase = Math.random() * Math.PI * 2;
-      // 熵越高（改动越频繁）闪烁越快，越"躁动"
+      // the higher the entropy (more frequent changes), the faster/more "restless" the twinkle
       n.twinkleSpeed = 0.6 + Math.random() * 1.2 + (n.entropy || 0) * 2;
-      // 引力质量：文件越大、被依赖越多，越能弯曲周围的时空网格
+      // gravity mass: the bigger the file and the more it's depended on, the more it warps the spacetime grid around it
       n.mass = n.radius + n.degree * 6;
     }
   }
 
-  // 均匀网格，做近似的粒子间斥力（避免 O(n^2)）
+  // Uniform grid for approximate inter-particle repulsion (avoids O(n^2))
   function buildGrid(cellSize) {
     const grid = new Map();
     for (const n of nodes) {
@@ -151,7 +152,7 @@
     const CENTER_PULL = 0.004;
     const DAMPING = 0.82;
 
-    // 斥力：只比较同格及相邻格
+    // Repulsion: only compare within the same cell and neighboring cells
     for (const n of nodes) {
       if (n.fixed) continue;
       const gx = Math.floor(n.x / cellSize);
@@ -175,10 +176,10 @@
           }
         }
       }
-      // 回到自己所在星云的中心
+      // pull back toward the center of its own nebula
       fx += (n.cx - n.x) * CENTER_PULL;
       fy += (n.cy - n.y) * CENTER_PULL;
-      // 熵：改动越频繁的文件，随机的"热运动"越明显
+      // entropy: the more often a file changes, the more visible its random "thermal motion"
       if (n.entropy) {
         const heat = n.entropy * 2.2;
         fx += (Math.random() - 0.5) * heat;
@@ -188,7 +189,7 @@
       n.vy = (n.vy + fy) * DAMPING;
     }
 
-    // 弹簧：调用关系拉近
+    // Springs: pull dependency-connected nodes closer together
     for (const e of edges) {
       const s = nodeById.get(e.source);
       const t = nodeById.get(e.target);
@@ -210,8 +211,8 @@
     }
   }
 
-  // ---- 渲染：粒子按"光子"来画 ----
-  // intensity 0..1：调用越多，颜色越亮/越饱和（粒子性：能量越高越亮）
+  // ---- Rendering: draw particles as "photons" ----
+  // intensity 0..1: the more calls, the brighter/more saturated the color (particle side: higher energy = brighter)
   function intensityRGB(hex, intensity) {
     const r = parseInt(hex.slice(1, 3), 16);
     const g = parseInt(hex.slice(3, 5), 16);
@@ -224,7 +225,7 @@
     const [r, g, b] = intensityRGB(hex, intensity);
     return `rgb(${r}, ${g}, ${b})`;
   }
-  // 光子核心：往白光混一点，越"重"(调用多)的粒子核心越白热
+  // Photon core: mix in some white light — the "heavier" (more-called) a particle, the whiter-hot its core
   function coreColor(hex, intensity) {
     const [r, g, b] = intensityRGB(hex, intensity);
     const w = 0.35 + intensity * 0.35;
@@ -235,7 +236,8 @@
   let selectedId = null;
   let hoveredId = null;
 
-  // 依赖弦上的光子抵达目标粒子时拨一下弦，节流避免密集调用图变得吵闹
+  // Pluck the string when a photon reaches its target particle along a dependency edge;
+  // throttled so a dense call graph doesn't get noisy
   const lastArrivalPluck = new Map();
   function triggerArrivalPluck(node) {
     const now = performance.now();
@@ -245,11 +247,11 @@
     window.CosmosAudio && window.CosmosAudio.pluck(node);
   }
 
-  // ---- 引力阱：背景时空网格，质量大/密集的地方网格会向粒子方向弯曲 ----
+  // ---- Gravity wells: a background spacetime grid that warps toward high-mass/dense areas ----
   let gravityWells = [];
   let gravityWellsTick = 0;
   function updateGravityWells() {
-    // 每 30 帧重选一次"引力源"（质量最大的一批粒子），不用每帧重排序
+    // Re-pick the "gravity sources" (the highest-mass particles) every 30 frames instead of every frame
     if (gravityWellsTick % 30 === 0) {
       gravityWells = [...nodes].sort((a, b) => b.mass - a.mass).slice(0, 40);
     }
@@ -274,7 +276,7 @@
     updateGravityWells();
     if (!gravityWells.length) return;
 
-    // 网格在世界坐标里的间距随缩放调整，保证屏幕上的疏密大致恒定
+    // Grid spacing in world coordinates adjusts with zoom, keeping on-screen density roughly constant
     const spacing = Math.max(24, 150 / view.scale);
     const segStep = spacing / 6;
     const [wxMin, wyMin] = screenToWorld(-40, -40);
@@ -318,7 +320,7 @@
 
     if (!dense) drawGravityGrid();
 
-    // 弦（依赖关系）：线本身 + 沿线传播的光子脉冲（粒子性的一面：能量沿弦传递）
+    // Strings (dependencies): the line itself + a photon pulse traveling along it (particle side: energy transfers along the string)
     ctx.lineWidth = 1;
     for (const e of edges) {
       const s = nodeById.get(e.source);
@@ -342,7 +344,7 @@
         ctx.fillStyle = 'rgba(200,210,255,0.75)';
         ctx.fill();
 
-        // 光子沿弦"到达"目标粒子时，轻轻拨一下弦（稀疏触发，避免吵）
+        // Give the string a light pluck when the photon "arrives" at the target particle (sparse trigger, avoids noise)
         if (audioEnabled && e._prevP !== undefined && p < e._prevP) {
           triggerArrivalPluck(tt);
         }
@@ -350,7 +352,7 @@
       }
     }
 
-    // 粒子（文件）：画成"光子" —— 波纹(波动性) + 光晕 + 白热核心(粒子性)
+    // Particles (files): drawn as "photons" — ripples (wave side) + halo + white-hot core (particle side)
     for (const n of nodes) {
       const [sx, sy] = worldToScreen(n.x, n.y);
       const r = Math.max(n.radius * view.scale, 1.4);
@@ -362,7 +364,7 @@
       const emphasize = n.id === selectedId || n.id === hoveredId;
 
       if (!dense) {
-        // 波动性：向外扩散、逐渐变淡的波前
+        // Wave side: an outward-expanding, gradually fading wavefront
         for (let i = 0; i < 2; i++) {
           const wave = ((t * 0.5 + n.phase / (Math.PI * 2) + i * 0.5) % 1);
           const waveR = r + wave * r * 3.2;
@@ -375,7 +377,7 @@
           ctx.stroke();
         }
 
-        // 光晕：径向渐变，越亮的粒子晕越大
+        // Halo: radial gradient, the brighter the particle the bigger its glow
         const haloR = r * (3 + n.intensity * 2.5);
         const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, haloR);
         grad.addColorStop(0, `rgba(${rgbStr},${(0.55 * twinkle).toFixed(3)})`);
@@ -394,7 +396,7 @@
         ctx.shadowBlur = 0;
       }
 
-      // 粒子性：白热的核心亮点
+      // Particle side: the white-hot core highlight
       ctx.beginPath();
       ctx.arc(sx, sy, r * twinkle, 0, Math.PI * 2);
       ctx.fillStyle = coreColor(n.color, n.intensity);
@@ -409,7 +411,7 @@
     }
     ctx.shadowBlur = 0;
 
-    // 标签：缩放够大时显示文件名
+    // Labels: show filenames once zoomed in far enough
     if (view.scale > 1.6) {
       ctx.font = '11px sans-serif';
       ctx.fillStyle = 'rgba(230,230,240,0.85)';
@@ -421,7 +423,7 @@
       }
     }
 
-    // 手势骨架：把识别到的双手直接叠加画在星图上，像 AR 一样悬浮在画布里
+    // Hand skeleton: overlay the detected hands directly onto the starmap, hovering over the canvas like AR
     if (handLandmarks.length && window.CosmosHands) {
       const connections = window.CosmosHands.HAND_CONNECTIONS || [];
       for (const landmarks of handLandmarks) {
@@ -447,7 +449,7 @@
       }
     }
 
-    // 手势光标：把摄像头识别到的手直接映射到画布上，给出"手在哪、指哪"的视觉反馈
+    // Hand cursor: map the camera-detected hand straight onto the canvas, giving visual feedback on where it's pointing
     if (handCursor) {
       const hx = handCursor.x * cssW;
       const hy = handCursor.y * cssH;
@@ -472,7 +474,7 @@
     drawCompassDial();
   }
 
-  // ---- 辅助标尺：固定在屏幕空间，跟平移/缩放联动，不受旋转影响（测的是"离屏幕中心多远"） ----
+  // ---- Reference rulers: fixed in screen space, follow pan/zoom, unaffected by rotation (measures "distance from screen center") ----
   function niceStep(target) {
     const magnitude = Math.pow(10, Math.floor(Math.log10(Math.max(target, 1e-6))));
     const residual = target / magnitude;
@@ -519,7 +521,8 @@
     }
   }
 
-  // ---- 圆形罗盘：外圈刻度反向旋转显示当前视角朝向，中心显示缩放%/旋转角度，点击可重置旋转 ----
+  // ---- Circular compass: the outer ring counter-rotates to show the current view heading; the
+  // center shows zoom%/rotation angle; click to reset rotation ----
   function compassCenter() {
     return [cssW / 2, cssH - 58];
   }
@@ -557,7 +560,7 @@
     ctx.strokeStyle = 'rgba(109,240,255,0.25)';
     ctx.stroke();
 
-    // 顶部固定小三角：代表当前屏幕朝向的参照点
+    // A fixed small triangle at the top: the reference point for the current screen orientation
     ctx.beginPath();
     ctx.moveTo(cx, cy - R - 8);
     ctx.lineTo(cx - 4, cy - R + 2);
@@ -577,8 +580,9 @@
     ctx.textAlign = 'left';
   }
 
-  // 环境声场：每颗粒子本身持续发声，但只挑离屏幕中心最近的一批（有限声部），
-  // 节流成每 ~200ms 重算一次，避免每帧都排序全部粒子
+  // Ambient sound field: every particle can sustain a tone, but only the batch nearest the
+  // screen center gets picked (bounded voices), throttled to recompute every ~200ms instead
+  // of sorting all particles every frame
   const AMBIENT_VOICES = 24;
   let ambientTickCounter = 0;
   function updateAmbientField() {
@@ -617,7 +621,7 @@
     requestAnimationFrame(loop);
   }
 
-  // ---- 交互：拖拽平移 / 缩放 / 拖动粒子 / 点击选中 ----
+  // ---- Interaction: drag to pan / zoom / drag a particle / click to select ----
   let dragging = false;
   let dragNode = null;
   let dragMoved = false;
@@ -673,7 +677,7 @@
       dragNode.vx = 0;
       dragNode.vy = 0;
     } else if (dragging && e.shiftKey) {
-      // 按住 Shift 拖拽 = 绕鼠标当前点旋转视角（那个世界点会一直停在鼠标下面）
+      // Shift+drag = rotate the view around the point under the mouse (that world point stays under the cursor)
       const rect = canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
@@ -723,7 +727,7 @@
     view.y += wy - nwy;
   }, { passive: false });
 
-  // ---- 触屏：单指拖拽平移/拖粒子/点选，双指捏合缩放 ----
+  // ---- Touch: one finger drag to pan/move a particle/select, two fingers to pinch-zoom ----
   let pinch = null;
 
   function touchScreenPoint(t) {
@@ -785,7 +789,8 @@
       }
       lastMouse = [t.clientX, t.clientY];
     } else if (e.touches.length >= 2 && pinch) {
-      // 标准双指手势：中点移动=平移，距离变化=缩放，连线角度变化=旋转，三者同时生效
+      // Standard two-finger gesture: midpoint movement = pan, distance change = zoom,
+      // angle change of the line between them = rotate — all three apply at once
       const [x1, y1] = touchScreenPoint(e.touches[0]);
       const [x2, y2] = touchScreenPoint(e.touches[1]);
       const midX = (x1 + x2) / 2;
@@ -815,19 +820,19 @@
       pinch = null;
       canvas.classList.remove('dragging');
     } else if (e.touches.length === 1) {
-      // 双指变单指：重置基准，避免位置跳变
+      // Went from two fingers to one: reset the baseline to avoid a position jump
       pinch = null;
       lastMouse = [e.touches[0].clientX, e.touches[0].clientY];
     }
   }, { passive: false });
 
-  // ---- 详情面板 / diff ----
+  // ---- Detail panel / diff ----
   function escapeHtml(s) {
     return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   }
 
   function renderDiff(text) {
-    if (!text) return '<p class="sub">无未提交改动</p>';
+    if (!text) return '<p class="sub">No uncommitted changes</p>';
     return '<pre>' + text.split('\n').map((line) => {
       const esc = escapeHtml(line);
       if (line.startsWith('+') && !line.startsWith('+++')) return `<span class="diff-add">${esc}</span>`;
@@ -841,24 +846,24 @@
     selectedId = n.id;
     if (audioEnabled) window.CosmosAudio && window.CosmosAudio.pluck(n);
     panelTitle.textContent = n.label;
-    panelMeta.textContent = `${n.id} · ${(n.size / 1024).toFixed(1)} KB · 调用度 ${n.degree}${gitRepo ? ` · 熵 ${n.entropy}（${n.churn} 次提交触碰）` : ''}`;
-    panelBody.innerHTML = '<p class="sub">加载中…</p>';
+    panelMeta.textContent = `${n.id} · ${(n.size / 1024).toFixed(1)} KB · degree ${n.degree}${gitRepo ? ` · entropy ${n.entropy} (touched by ${n.churn} commits)` : ''}`;
+    panelBody.innerHTML = '<p class="sub">Loading…</p>';
     panel.classList.add('open');
 
     if (!gitRepo) {
       const res = await fetch('/api/file?file=' + encodeURIComponent(n.id));
       const data = await res.json();
       panelBody.innerHTML = data.content
-        ? '<h3>文件内容预览</h3><pre>' + escapeHtml(data.content) + '</pre>'
-        : '<p class="sub">无法读取（可能是二进制文件）</p>';
+        ? '<h3>File preview</h3><pre>' + escapeHtml(data.content) + '</pre>'
+        : '<p class="sub">Could not read this file (may be binary)</p>';
       return;
     }
 
     const res = await fetch('/api/diff?file=' + encodeURIComponent(n.id));
     const data = await res.json();
     let html = '';
-    html += '<h3>未提交改动</h3>' + renderDiff(data.diff);
-    html += '<h3>最近提交</h3><pre>' + escapeHtml(data.log || '（无历史）') + '</pre>';
+    html += '<h3>Uncommitted changes</h3>' + renderDiff(data.diff);
+    html += '<h3>Recent commits</h3><pre>' + escapeHtml(data.log || '(no history)') + '</pre>';
     panelBody.innerHTML = html;
   }
 
@@ -878,7 +883,7 @@
     }
   });
 
-  // ---- 初始化：拉取数据 ----
+  // ---- Init: fetch data ----
   async function main() {
     const res = await fetch('/api/graph');
     const data = await res.json();
@@ -887,14 +892,14 @@
     gitRepo = data.gitRepo;
     nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-    rootLabel.textContent = `${nodes.length} 个粒子 · ${edges.length} 条弦${gitRepo ? ' · git 已连接' : ''}`;
-    statsEl.textContent = `最大调用度: ${data.maxDegree}`;
+    rootLabel.textContent = `${nodes.length} particles · ${edges.length} strings${gitRepo ? ' · git connected' : ''}`;
+    statsEl.textContent = `Max degree: ${data.maxDegree}`;
 
     const seen = new Map();
     for (const n of nodes) if (!seen.has(n.ext)) seen.set(n.ext, n.color);
     legendEl.innerHTML = [...seen.entries()]
       .sort()
-      .map(([ext, color]) => `<span class="legend-item"><span class="dot" style="background:${color}"></span>${ext || '(无扩展名)'}</span>`)
+      .map(([ext, color]) => `<span class="legend-item"><span class="dot" style="background:${color}"></span>${ext || '(no extension)'}</span>`)
       .join('');
 
     avgEntropy = nodes.length ? nodes.reduce((s, n) => s + (n.entropy || 0), 0) / nodes.length : 0;
@@ -904,42 +909,44 @@
   }
 
   main().catch((err) => {
-    rootLabel.textContent = '加载失败: ' + err.message;
+    rootLabel.textContent = 'Failed to load: ' + err.message;
   });
 
-  // ---- 音乐：默认关闭，点击才申请音频权限（浏览器策略要求用户手势） ----
+  // ---- Music: off by default, only requests audio permission on click (browsers require a user gesture) ----
   soundToggleEl.addEventListener('click', async () => {
     if (!audioEnabled) {
-      soundToggleEl.textContent = '…启动音频';
+      soundToggleEl.textContent = '…starting audio';
       try {
         await window.CosmosAudio.init();
         audioEnabled = true;
         window.CosmosAudio.setEnabled(true);
         window.CosmosAudio.updateEntropy(avgEntropy);
-        soundToggleEl.textContent = '🔊 音乐: 开';
+        soundToggleEl.textContent = '🔊 Music: on';
         soundToggleEl.classList.add('on');
       } catch {
-        soundToggleEl.textContent = '🔈 音乐: 关（不可用）';
+        soundToggleEl.textContent = '🔈 Music: off (unavailable)';
       }
     } else {
       audioEnabled = false;
       window.CosmosAudio.setEnabled(false);
-      soundToggleEl.textContent = '🔈 音乐: 关';
+      soundToggleEl.textContent = '🔈 Music: off';
       soundToggleEl.classList.remove('on');
     }
   });
 
-  // ---- 手势：摄像头识别双手，映射到画布 ----
-  // 单手握拳=抓住画布后移动=平移，张开手指=松手停止；
-  // 双手同时握拳=抓住画布，开合=缩放/连线角度变化=旋转/双手一起移动=平移，三者同时生效，松开任一只手=停止；
-  // 拇指食指捏合=选中该处最近的粒子。
-  let twoHandGrabStart = null; // { dist, angle, scale, rotation }，双手抓取手势开始时的基准状态
-  let lastPinchId = null; // 上一次捏合命中的粒子 id，用于判定"双击"
+  // ---- Gestures: camera-based two-hand tracking, mapped onto the canvas ----
+  // one-hand fist = grab the canvas, then move = pan; open the fingers = release and stop;
+  // both hands fisted = grab the canvas, spread/close = zoom, angle change of the line
+  // between them = rotate, moving both hands = pan — all three apply at once; release
+  // either hand = stop;
+  // thumb-index pinch = select the nearest particle there.
+  let twoHandGrabStart = null; // { dist, angle, scale, rotation }, the baseline state when the two-hand grab began
+  let lastPinchId = null; // the particle id the last pinch hit, used to detect a "double pinch"
   let lastPinchTime = 0;
-  const DOUBLE_PINCH_WINDOW = 450; // 两次捏合间隔小于这个值(ms)才算双击
+  const DOUBLE_PINCH_WINDOW = 450; // two pinches count as a double pinch if closer together than this (ms)
   handToggleEl.addEventListener('click', async () => {
     if (!handsEnabled) {
-      handToggleEl.textContent = '…启动摄像头';
+      handToggleEl.textContent = '…starting camera';
       try {
         await window.CosmosHands.start({
           overlayCanvas: handCanvasEl,
@@ -976,7 +983,8 @@
             if (state === 'idle') twoHandGrabStart = null;
           },
           onPinch: (xNorm, yNorm) => {
-            // 单次捏合太容易误触，先只轻量高亮；短时间内对同一个粒子再捏一次（双击）才真正打开详情面板
+            // A single pinch is too easy to trigger by accident, so it only lightly highlights;
+            // pinching the same particle again within the window (a double pinch) is what actually opens the detail panel
             const hit = pickNode(xNorm * cssW, yNorm * cssH);
             if (!hit) {
               lastPinchId = null;
@@ -997,10 +1005,10 @@
         });
         handsEnabled = true;
         handPreviewEl.classList.add('show');
-        handToggleEl.textContent = '🖐️ 手势: 开';
+        handToggleEl.textContent = '🖐️ Gestures: on';
         handToggleEl.classList.add('on');
       } catch {
-        handToggleEl.textContent = '🖐️ 手势: 关（不可用）';
+        handToggleEl.textContent = '🖐️ Gestures: off (unavailable)';
       }
     } else {
       window.CosmosHands.stop();
@@ -1008,12 +1016,12 @@
       handCursor = null;
       handLandmarks = [];
       handPreviewEl.classList.remove('show');
-      handToggleEl.textContent = '🖐️ 手势: 关';
+      handToggleEl.textContent = '🖐️ Gestures: off';
       handToggleEl.classList.remove('on');
     }
   });
 
-  // ---- VR HUD 观感：无操作一段时间后自动淡出，靠近/操作时立刻亮起 ----
+  // ---- VR HUD feel: auto-fades out after a period of inactivity, brightens instantly on approach/interaction ----
   const hudEl = document.getElementById('hud');
   const hintEl = document.getElementById('hint');
   let idleTimer = null;

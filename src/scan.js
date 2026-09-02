@@ -17,7 +17,7 @@ function isGitRepo(rootDir) {
   }
 }
 
-// 通过 git 拿文件列表：已跟踪 + 未跟踪但未被 .gitignore 忽略的
+// Get the file list via git: tracked files + untracked files not excluded by .gitignore
 function listFilesViaGit(rootDir) {
   const out = execFileSync(
     'git',
@@ -27,7 +27,7 @@ function listFilesViaGit(rootDir) {
   return out.split('\0').filter(Boolean);
 }
 
-// 没有 git 时的兜底：手动递归，只排除几个常见重目录
+// Fallback when there's no git: manual recursion, only excluding a few common heavy dirs
 function listFilesViaWalk(rootDir) {
   const results = [];
   function walk(dir) {
@@ -61,7 +61,7 @@ function scan(rootDir) {
     try {
       stat = fs.statSync(abs);
     } catch {
-      continue; // 比如已跟踪但本地被删除的文件
+      continue; // e.g. a tracked file that's been deleted locally
     }
     if (!stat.isFile()) continue;
     files.push({

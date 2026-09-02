@@ -5,9 +5,10 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-// 摄像头（getUserMedia）只在"安全上下文"里可用：https，或者 http://localhost。
-// 局域网访问（比如手机连电脑的 IP）必须走 https，这里用 openssl 生成一份自签名证书，
-// 缓存到用户目录，避免每次启动都重新生成。
+// The camera (getUserMedia) only works in a "secure context": https, or http://localhost.
+// LAN access (e.g. a phone hitting the machine's IP) must go over https, so we generate a
+// self-signed cert with openssl here and cache it in the user's home dir to avoid
+// regenerating it on every startup.
 function ensureSelfSignedCert() {
   const dir = path.join(os.homedir(), '.cache', 'starmap');
   fs.mkdirSync(dir, { recursive: true });
@@ -28,7 +29,8 @@ function ensureSelfSignedCert() {
       );
     } catch (err) {
       throw new Error(
-        '生成自签名证书失败（需要系统装有 openssl）：' + (err.stderr ? err.stderr.toString('utf8') : err.message)
+        'Failed to generate self-signed cert (requires openssl on the system): ' +
+          (err.stderr ? err.stderr.toString('utf8') : err.message)
       );
     }
   }
@@ -36,7 +38,7 @@ function ensureSelfSignedCert() {
   return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
 }
 
-// 局域网可访问的 IPv4 地址列表，方便打印给手机等设备使用
+// LAN-reachable IPv4 addresses, so we can print one for phones and other devices to use
 function listLanAddresses() {
   const nets = os.networkInterfaces();
   const addrs = [];

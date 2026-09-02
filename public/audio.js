@@ -1,8 +1,8 @@
 (() => {
   'use strict';
 
-  // 用 Tone.js 的物理建模拨弦音色，呼应"粒子弦"的设定：
-  // 点击/被调用到的粒子 = 拨一下弦；熵驱动一层环境底噪。
+  // Uses Tone.js's physically-modeled plucked-string voice, echoing the "particle string" theme:
+  // clicking/being called into a particle = plucking a string; entropy drives an ambient noise floor.
   let ready = false;
   let pluck = null;
   let drone = null;
@@ -21,7 +21,7 @@
   function noteForNode(n) {
     const extHash = hashStr(n.ext || n.label || '') % 5;
     const normSize = Math.max(0, Math.min(1, (n.radius - 3) / 23));
-    const sizeRank = 2 - Math.round(normSize * 2); // 文件越大音越低
+    const sizeRank = 2 - Math.round(normSize * 2); // the bigger the file, the lower the pitch
     const idx = Math.max(0, Math.min(SCALE.length - 1, sizeRank * 5 + extHash));
     return SCALE[idx];
   }
@@ -47,7 +47,7 @@
     drone = new Tone.Noise('pink').start();
     droneFilter = new Tone.Filter(260, 'lowpass').toDestination();
     drone.connect(droneFilter);
-    drone.volume.value = -60; // 起始几乎静音，由 updateEntropy 按熵值调高
+    drone.volume.value = -60; // near-silent at start; updateEntropy raises it based on the entropy value
 
     ensureVoices();
     ready = true;
@@ -65,20 +65,21 @@
       pluck.dampening = 1800 + (n.intensity || 0) * 4500;
       pluck.triggerAttack(noteForNode(n));
     } catch {
-      // 偶发的音频节点异常不应该影响主功能
+      // an occasional audio-node glitch shouldn't affect core functionality
     }
   }
 
   function updateEntropy(avgEntropy) {
     if (!ready || !drone || !droneFilter) return;
-    const vol = -60 + avgEntropy * 40; // 熵越高，底噪越明显
+    const vol = -60 + avgEntropy * 40; // the higher the entropy, the more prominent the noise floor
     const cutoff = 200 + avgEntropy * 2200;
     drone.volume.rampTo(vol, 3);
     droneFilter.frequency.rampTo(cutoff, 3);
   }
 
-  // 有限声部的环境声场：每个粒子本身持续发声，但只给"离视口中心最近"的一批粒子
-  // 分配声音槽（voice-stealing），离场的淡出、新进来的淡入，避免上千个粒子同时发声
+  // A bounded-voice ambient sound field: every particle can sustain a tone, but only the ones
+  // "closest to the viewport center" get a voice slot assigned (voice-stealing) — fading out as
+  // particles leave and fading in as new ones enter, so thousands of particles never sound at once
   function applyCandidate(v, c, isNew) {
     const targetGain = Math.max(0, Math.min(0.14, c.gain || 0));
     const freq = Tone.Frequency(noteForNode(c)).toFrequency();
@@ -96,7 +97,7 @@
     if (!ready || !voices.length) return;
     const wantedIds = new Set(candidates.map((c) => c.id));
 
-    // 不再需要的声音槽：淡出并释放
+    // Voice slots no longer needed: fade out and release
     for (const v of voices) {
       if (v.id && !wantedIds.has(v.id)) {
         v.gain.gain.rampTo(0, 0.5);

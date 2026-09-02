@@ -1,10 +1,12 @@
 (() => {
   'use strict';
 
-  // 用 MediaPipe Hands（纯浏览器端 WASM，不上传画面）识别双手关键点，映射成：
-  // 单手握拳(抓取)后移动=平移，张开手指=松手停止；
-  // 双手同时握拳后开合/旋转/移动=缩放+旋转+平移三合一（松开任一只手=停止）；
-  // 拇指食指捏合=选中该处最近的粒子。
+  // Uses MediaPipe Hands (pure browser-side WASM, no video is uploaded) to track both hands' key
+  // points and maps them to:
+  // one-hand fist (grab) then move = pan; opening the fingers = release and stop;
+  // both hands fisted then spreading/rotating/moving = zoom + rotate + pan all at once
+  // (releasing either hand = stop);
+  // thumb-index pinch = select the nearest particle at that point.
   const HAND_CONNECTIONS = [
     [0, 1], [1, 2], [2, 3], [3, 4],
     [0, 5], [5, 6], [6, 7], [7, 8],
@@ -14,8 +16,8 @@
     [0, 17],
   ];
   const PINCH_THRESHOLD = 0.055;
-  const FIST_TIP_INDICES = [8, 12, 16, 20]; // 食指/中指/无名指/小指指尖
-  const FIST_RATIO = 1.3; // 指尖到手腕的距离 < 手掌尺寸 * 这个比例，判定为握拳
+  const FIST_TIP_INDICES = [8, 12, 16, 20]; // index/middle/ring/pinky fingertips
+  const FIST_RATIO = 1.3; // fist = fingertip-to-wrist distance < palm size * this ratio
 
   let hands = null;
   let stream = null;
@@ -26,15 +28,16 @@
   let rafId = null;
   let callbacks = {};
   let pinchState = [false, false];
-  let onePanPrev = null; // 单手抓取时，上一帧的掌心位置（已镜像，0..1）
-  let twoGrabActive = false; // 是否处于"双手同时握拳"手势中
-  let grabState = 'idle'; // 'idle' | 'pan' | 'zoom'，仅用于对外汇报状态
+  let onePanPrev = null; // last frame's palm position during a one-hand grab (mirrored, 0..1)
+  let twoGrabActive = false; // whether we're currently in a "both hands fisted" gesture
+  let grabState = 'idle'; // 'idle' | 'pan' | 'zoom', only used to report state outward
 
   function dist(a, b) {
     return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
-  // 用手腕(0)和中指根部(9)的中点近似掌心；x 取镜像，符合"手往右移=画面往右"的直觉
+  // Approximate the palm center as the midpoint of the wrist (0) and middle-finger MCP (9);
+  // x is mirrored to match the intuition "hand moves right = view moves right"
   function palmCenter(landmarks) {
     const w = landmarks[0];
     const m = landmarks[9];
@@ -45,8 +48,9 @@
     return dist(landmarks[4], landmarks[8]) < PINCH_THRESHOLD;
   }
 
-  // 用"指尖是否缩回到手腕附近"判定握拳，用手掌尺寸(手腕到中指根部)做尺度归一，
-  // 这样手离摄像头远近不同也能用同一个阈值
+  // Detect a fist by whether the fingertips have curled back near the wrist, normalized by
+  // palm size (wrist to middle-finger MCP) so the same threshold works regardless of how far
+  // the hand is from the camera
   function isFist(landmarks) {
     const size = dist(landmarks[0], landmarks[9]) || 0.0001;
     let curled = 0;
@@ -62,14 +66,15 @@
     callbacks.onGrabState && callbacks.onGrabState(next);
   }
 
-  // 小窗只保留原始镜像画面，用来确认摄像头/光线是否正常；骨架改到主画布上画
+  // The small preview widget only shows the raw mirrored camera feed, so you can confirm the
+  // camera/lighting is working; the skeleton itself is drawn on the main canvas instead
   function drawCameraPreview() {
     if (!overlayCtx) return;
     const w = overlay.width;
     const h = overlay.height;
     overlayCtx.clearRect(0, 0, w, h);
     if (video && video.readyState >= 2) {
-      overlayCtx.drawImage(video, w, 0, -w, h); // 负宽度=水平镜像绘制
+      overlayCtx.drawImage(video, w, 0, -w, h); // negative width = draw horizontally mirrored
     }
   }
 
@@ -80,8 +85,9 @@
     const mirroredHands = list.map((landmarks) => landmarks.map((p) => ({ x: 1 - p.x, y: p.y })));
     callbacks.onLandmarks && callbacks.onLandmarks(mirroredHands);
 
-    // 准星只在捏合时出现：平时手在动（尤其是握拳平移/缩放时）不需要一直跟着一个点晃，
-    // 只有真的要选中东西（捏合）才把它显出来，视觉上更干净、不容易觉得"抖"
+    // The reticle only appears while pinching: when the hand is just moving around (especially
+    // during a fist pan/zoom), there's no need for a point to keep jittering around; only show
+    // it when you're actually about to select something (a pinch) — cleaner, less "shaky"
     if (list.length >= 1 && isPinching(list[0])) {
       const tip = list[0][8];
       callbacks.onCursor && callbacks.onCursor(1 - tip.x, tip.y);
@@ -179,7 +185,7 @@
       try {
         await hands.send({ image: video });
       } catch {
-        // 单帧识别失败忽略，继续下一帧
+        // ignore a single failed detection frame and move on
       }
       rafId = requestAnimationFrame(loop);
     };
@@ -192,7 +198,7 @@
     rafId = null;
     if (stream) stream.getTracks().forEach((t) => t.stop());
     stream = null;
-    if (hands) { try { hands.close(); } catch { /* 忽略关闭异常 */ } }
+    if (hands) { try { hands.close(); } catch { /* ignore close errors */ } }
     hands = null;
     onePanPrev = null;
     twoGrabActive = false;

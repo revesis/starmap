@@ -30,12 +30,12 @@ function main() {
   if (args.help) {
     console.log(
       [
-        'starmap — 把当前目录的代码渲染成一片星云',
+        'starmap — render the current directory\'s code as a particle cosmos',
         '',
-        '用法: starmap [目录] [--port 4550] [--https]',
+        'Usage: starmap [dir] [--port 4550] [--https]',
         '',
-        '  --https  用自签名证书起 HTTPS（手机等设备通过局域网 IP 访问时，',
-        '           摄像头手势功能需要安全上下文，必须用这个）',
+        '  --https  Serve HTTPS with a self-signed cert (needed for the camera',
+        '           gesture feature when accessed from another device over LAN)',
       ].join('\n')
     );
     return;
@@ -53,19 +53,19 @@ function main() {
     }
     const server = https.createServer(certs, createRequestHandler(rootDir));
     server.listen(args.port, () => {
-      console.log(`✨ starmap 正在扫描: ${rootDir}`);
-      console.log(`🌌 本机打开: https://localhost:${args.port}`);
+      console.log(`✨ starmap is scanning: ${rootDir}`);
+      console.log(`🌌 Open locally: https://localhost:${args.port}`);
       for (const addr of listLanAddresses()) {
-        console.log(`📱 局域网设备打开: https://${addr}:${args.port}`);
+        console.log(`📱 Open from a LAN device: https://${addr}:${args.port}`);
       }
-      console.log('⚠️  自签名证书，浏览器会提示不安全，选择"继续访问"即可');
+      console.log('⚠️  Self-signed cert — your browser will warn it\'s unsafe, just click through');
     });
   } else {
     const server = createServer(rootDir);
     server.listen(args.port, () => {
-      console.log(`✨ starmap 正在扫描: ${rootDir}`);
-      console.log(`🌌 在浏览器打开: http://localhost:${args.port}`);
-      console.log('   （摄像头手势功能需要 https 或 localhost；局域网访问请加 --https）');
+      console.log(`✨ starmap is scanning: ${rootDir}`);
+      console.log(`🌌 Open in your browser: http://localhost:${args.port}`);
+      console.log('   (camera gestures need https or localhost; add --https for LAN access)');
     });
   }
 }

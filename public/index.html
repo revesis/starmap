@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
@@ -16,7 +16,7 @@
   #cosmos { display: block; width: 100vw; height: 100vh; cursor: grab; touch-action: none; }
   #cosmos.dragging { cursor: grabbing; }
 
-  /* ---- 移动端引导：建议横屏 + 进入全屏 ---- */
+  /* ---- Mobile onboarding: suggest landscape + entering fullscreen ---- */
   #mobileGate { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center;
     background: rgba(5,6,13,0.92); backdrop-filter: blur(4px); }
   #mobileGate.show { display: flex; }
@@ -33,14 +33,14 @@
   .gate-card button + button { margin-top: 8px; background: none; border-color: transparent; color: #6f97a0; font-size: 11px; }
   #gateEnter:hover { border-color: var(--accent); color: var(--accent); }
 
-  /* 全屏扫描线 + 暗角，纯装饰，不挡交互 */
+  /* Full-screen scanlines + vignette, purely decorative, doesn't block interaction */
   #overlay { position: fixed; inset: 0; pointer-events: none; z-index: 3; mix-blend-mode: screen;
     background:
       repeating-linear-gradient(0deg, rgba(140,220,255,0.025) 0px, rgba(140,220,255,0.025) 1px, transparent 1px, transparent 3px),
       radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.55) 100%);
   }
 
-  /* ---- HUD 通用面板：切角、半透明、发光细边 ---- */
+  /* ---- Shared HUD panel: clipped corners, translucent, glowing thin border ---- */
   .hud-panel {
     position: relative;
     background: var(--hud-bg);
@@ -119,7 +119,7 @@
   .diff-del { color: #ff7b72; }
   .diff-hunk { color: #6e7cff; }
 
-  /* ---- 手机横屏：竖向空间紧张，收紧 HUD ---- */
+  /* ---- Mobile landscape: vertical space is tight, tighten up the HUD ---- */
   @media (max-height: 480px) {
     #hud { max-width: 220px; gap: 6px; top: 8px; left: 8px; }
     .hud-panel { padding: 6px 10px 8px; }
@@ -139,29 +139,29 @@
 
   <div id="mobileGate">
     <div class="gate-card">
-      <p class="gate-title">进入沉浸模式</p>
-      <p class="gate-sub">建议横屏 + 全屏观看，画面和触控体验最佳</p>
-      <button id="gateEnter">进入全屏</button>
-      <button id="gateSkip">跳过</button>
+      <p class="gate-title">Enter immersive mode</p>
+      <p class="gate-sub">Landscape + fullscreen is recommended for the best visuals and touch controls</p>
+      <button id="gateEnter">Enter fullscreen</button>
+      <button id="gateSkip">Skip</button>
     </div>
   </div>
 
   <div id="hud">
     <div class="hud-panel">
       <p class="title">Starmap</p>
-      <p class="sub" id="rootLabel">扫描中…</p>
-      <input id="search" type="text" placeholder="搜索文件名…" />
+      <p class="sub" id="rootLabel">Scanning…</p>
+      <input id="search" type="text" placeholder="Search filenames…" />
       <div id="stats"></div>
-      <button id="soundToggle">🔈 音乐: 关</button>
-      <button id="handToggle">🖐️ 手势: 关</button>
+      <button id="soundToggle">🔈 Music: off</button>
+      <button id="handToggle">🖐️ Gestures: off</button>
     </div>
     <div class="hud-panel">
-      <p class="title" style="font-size:10px;">图例 / 扩展名</p>
+      <p class="title" style="font-size:10px;">Legend / extensions</p>
       <div id="legend"></div>
     </div>
   </div>
 
-  <div id="hint">滚轮缩放 · 拖拽平移 · Shift+拖拽=旋转 · 拖动粒子固定 · 点击查看详情/diff · 点底部罗盘归零旋转 · 网格弯曲=引力阱 · 抖动明显=熵高</div>
+  <div id="hint">Scroll to zoom · drag to pan · Shift+drag to rotate · drag a particle to pin it · click for details/diff · click the bottom compass to reset rotation · warped grid = gravity well · visible jitter = high entropy</div>
 
   <div id="handPreview" class="hud-panel">
     <canvas id="handCanvas" width="220" height="165"></canvas>
