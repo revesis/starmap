@@ -279,8 +279,11 @@
     gravityWellsTick++;
   }
 
+  // Returns the warped world point plus a "depth" scalar (how deep this point sits inside a
+  // gravity well). Depth has no real coordinate behind it — see drawGravityGrid — it's only used
+  // to fake a funnel by nudging the drawn point down the screen afterward.
   function warpPoint(px, py) {
-    let dx = 0, dy = 0;
+    let dx = 0, dy = 0, depth = 0;
     for (const w of gravityWells) {
       const ddx = w.x - px;
       const ddy = w.y - py;
@@ -289,8 +292,9 @@
       const dist = Math.sqrt(distSq);
       dx += (ddx / dist) * pull;
       dy += (ddy / dist) * pull;
+      depth += pull;
     }
-    return [px + dx, py + dy];
+    return [px + dx, py + dy, Math.min(depth, 220)];
   }
 
   function drawGravityGrid() {
@@ -308,13 +312,18 @@
     ctx.lineWidth = 1;
     ctx.strokeStyle = 'rgba(120,175,255,0.10)';
 
+    // Pseudo-3D funnel: push points down the screen in proportion to how deep they sit inside a
+    // gravity well, purely for the drawn line — this never touches world/particle coordinates.
+    const FUNNEL_DEPTH = 0.8;
+
     for (let x = startX; x <= wxMax; x += spacing) {
       ctx.beginPath();
       let first = true;
       for (let y = startY; y <= wyMax; y += segStep) {
-        const [wx, wy] = warpPoint(x, y);
+        const [wx, wy, depth] = warpPoint(x, y);
         const [sx, sy] = worldToScreen(wx, wy);
-        if (first) { ctx.moveTo(sx, sy); first = false; } else ctx.lineTo(sx, sy);
+        const dsy = sy + depth * FUNNEL_DEPTH;
+        if (first) { ctx.moveTo(sx, dsy); first = false; } else ctx.lineTo(sx, dsy);
       }
       ctx.stroke();
     }
@@ -322,9 +331,10 @@
       ctx.beginPath();
       let first = true;
       for (let x = startX; x <= wxMax; x += segStep) {
-        const [wx, wy] = warpPoint(x, y);
+        const [wx, wy, depth] = warpPoint(x, y);
         const [sx, sy] = worldToScreen(wx, wy);
-        if (first) { ctx.moveTo(sx, sy); first = false; } else ctx.lineTo(sx, sy);
+        const dsy = sy + depth * FUNNEL_DEPTH;
+        if (first) { ctx.moveTo(sx, dsy); first = false; } else ctx.lineTo(sx, dsy);
       }
       ctx.stroke();
     }
