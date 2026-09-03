@@ -122,6 +122,37 @@
     ];
   }
 
+  function energyLevelFor(entropy) {
+    return Math.min(4, Math.floor((entropy || 0) * 5));
+  }
+
+  // Periodically re-scans (via /api/refresh) and checks each particle's discrete energy level.
+  // Unlike the continuous entropy jitter, a level only changes in whole steps — when it does, we
+  // flag a brief flash instead of interpolating, the visual analogue of a quantum jump rather
+  // than thermal noise.
+  const ENERGY_REFRESH_MS = 20000;
+  const ENERGY_FLASH_MS = 700;
+  async function refreshEnergyLevels() {
+    try {
+      const res = await fetch('/api/refresh', { method: 'POST' });
+      const data = await res.json();
+      for (const updated of data.nodes) {
+        const n = nodeById.get(updated.id);
+        if (!n) continue; // new/removed files: out of scope here, full graph rebuild handles that on reload
+        n.entropy = updated.entropy;
+        n.churn = updated.churn;
+        const newLevel = energyLevelFor(n.entropy);
+        if (newLevel !== n.energyLevel) {
+          n.energyLevel = newLevel;
+          n.flashUntil = performance.now() + ENERGY_FLASH_MS;
+          if (audioEnabled) window.CosmosAudio && window.CosmosAudio.pluck(n);
+        }
+      }
+    } catch {
+      // a failed refresh just means we try again next interval
+    }
+  }
+
   // ---- Layout: cluster into per-directory "nebulae", force-directed within each cluster ----
   function initLayout() {
     const dirs = [...new Set(nodes.map((n) => n.dir))];
@@ -147,6 +178,11 @@
       n.twinkleSpeed = 0.6 + Math.random() * 1.2 + (n.entropy || 0) * 2;
       // gravity mass: the bigger the file and the more it's depended on, the more it warps the spacetime grid around it
       n.mass = n.radius + n.degree * 6;
+      // discrete "energy level" (0-4) bucketed from entropy — a quantum-jump-style analogue to
+      // the continuous entropy jitter above: this only ever changes in whole steps, on refresh
+      // (see refreshEnergyLevels), not smoothly frame-to-frame
+      n.energyLevel = energyLevelFor(n.entropy);
+      n.flashUntil = 0;
     }
   }
 
@@ -432,6 +468,17 @@
       ctx.arc(sx, sy, r * twinkle, 0, Math.PI * 2);
       ctx.fillStyle = coreColor(n.color, n.intensity);
       ctx.fill();
+
+      // Energy-level jump: a discrete event (see refreshEnergyLevels), so it flashes as an
+      // expanding ring rather than blending in with the continuous twinkle/glow above
+      if (n.flashUntil && t * 1000 < n.flashUntil) {
+        const remain = (n.flashUntil - t * 1000) / ENERGY_FLASH_MS; // 1 -> 0
+        ctx.beginPath();
+        ctx.arc(sx, sy, r * (1 + (1 - remain) * 5), 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255,255,255,${(remain * 0.8).toFixed(3)})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
 
       if (n.id === selectedId) {
         ctx.lineWidth = 2;
@@ -936,6 +983,7 @@
 
     initLayout();
     loop();
+    setInterval(refreshEnergyLevels, ENERGY_REFRESH_MS);
   }
 
   main().catch((err) => {
