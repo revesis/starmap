@@ -23,28 +23,36 @@
   let avgEntropy = 0;
 
   // ---- Mobile onboarding: prompt touch devices to go landscape + fullscreen ----
+  const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
+  // Re-enterable: a native permission dialog (e.g. the camera prompt for gestures) can kick
+  // the page out of fullscreen/landscape on some mobile browsers, so this gets called again
+  // after such prompts resolve, not just once from the onboarding gate.
+  async function enterImmersiveMode() {
+    if (!isTouch) return;
+    const el = document.documentElement;
+    try {
+      if (el.requestFullscreen) await el.requestFullscreen();
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    } catch {
+      // some browsers (e.g. iOS Safari) don't support the Fullscreen API — safe to ignore
+    }
+    try {
+      if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape');
+    } catch {
+      // some browsers don't support locking orientation — safe to ignore
+    }
+  }
+
   (function setupMobileGate() {
     const gate = document.getElementById('mobileGate');
-    if (!gate) return;
-    const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (!isTouch) return;
+    if (!gate || !isTouch) return;
     gate.classList.add('show');
 
     const hide = () => gate.classList.remove('show');
     document.getElementById('gateSkip').addEventListener('click', hide);
     document.getElementById('gateEnter').addEventListener('click', async () => {
-      const el = document.documentElement;
-      try {
-        if (el.requestFullscreen) await el.requestFullscreen();
-        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-      } catch {
-        // some browsers (e.g. iOS Safari) don't support the Fullscreen API — safe to ignore
-      }
-      try {
-        if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape');
-      } catch {
-        // some browsers don't support locking orientation — safe to ignore
-      }
+      await enterImmersiveMode();
       hide();
     });
   })();
@@ -1010,6 +1018,9 @@
       } catch {
         handToggleEl.textContent = '🖐️ Gestures: off (unavailable)';
       }
+      // The camera permission dialog can drop the page out of fullscreen/landscape on mobile
+      // browsers, whether or not permission was granted — re-apply it either way.
+      await enterImmersiveMode();
     } else {
       window.CosmosHands.stop();
       handsEnabled = false;
