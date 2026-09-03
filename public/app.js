@@ -98,6 +98,19 @@
     const ry = -dx * sin + dy * cos;
     return [rx + view.x, ry + view.y];
   }
+  // Given a world point and the screen position it should appear at under the CURRENT
+  // scale/rotation, solve for the view.x/y that makes that true. Used by two-finger/two-hand
+  // gestures: anchor a world point (captured at gesture start) to the moving screen midpoint,
+  // so spreading/rotating zooms+rotates around it AND dragging both points together pans.
+  function solveViewOffsetForAnchor(worldX, worldY, screenX, screenY) {
+    const dx = (screenX - cssW / 2) / view.scale;
+    const dy = (screenY - cssH / 2) / view.scale;
+    const cos = Math.cos(view.rotation);
+    const sin = Math.sin(view.rotation);
+    const rx = dx * cos + dy * sin;
+    const ry = -dx * sin + dy * cos;
+    return [worldX - rx, worldY - ry];
+  }
   // Convert a "screen pixel offset" into the corresponding world-coordinate offset,
   // used for drag-panning (accounts for rotation)
   function screenDeltaToWorld(ddx, ddy) {
@@ -772,6 +785,7 @@
         startAngle: Math.atan2(y2 - y1, x2 - x1),
         startScale: view.scale,
         startRotation: view.rotation,
+        anchorWorld: screenToWorld((x1 + x2) / 2, (y1 + y2) / 2),
       };
     }
   }, { passive: false });
@@ -805,12 +819,10 @@
       const midY = (y1 + y2) / 2;
       const dist = Math.hypot(x2 - x1, y2 - y1) || 1;
       const angle = Math.atan2(y2 - y1, x2 - x1);
-      const [wx, wy] = screenToWorld(midX, midY);
       view.scale = Math.min(20, Math.max(0.05, pinch.startScale * (dist / pinch.startDist)));
       view.rotation = pinch.startRotation + (angle - pinch.startAngle);
-      const [nwx, nwy] = screenToWorld(midX, midY);
-      view.x += wx - nwx;
-      view.y += wy - nwy;
+      const [ax, ay] = pinch.anchorWorld;
+      [view.x, view.y] = solveViewOffsetForAnchor(ax, ay, midX, midY);
     }
   }, { passive: false });
 
@@ -972,19 +984,20 @@
             view.y -= worldDy;
           },
           onTwoHandTransform: (d, angle, midXNorm, midYNorm, phase) => {
+            const sx = midXNorm * cssW;
+            const sy = midYNorm * cssH;
             if (phase === 'start') {
-              twoHandGrabStart = { dist: d, angle, scale: view.scale, rotation: view.rotation };
+              twoHandGrabStart = {
+                dist: d, angle, scale: view.scale, rotation: view.rotation,
+                anchorWorld: screenToWorld(sx, sy),
+              };
               return;
             }
             if (!twoHandGrabStart) return;
-            const sx = midXNorm * cssW;
-            const sy = midYNorm * cssH;
-            const [wx, wy] = screenToWorld(sx, sy);
             view.scale = Math.min(20, Math.max(0.05, twoHandGrabStart.scale * (d / twoHandGrabStart.dist)));
             view.rotation = twoHandGrabStart.rotation + (angle - twoHandGrabStart.angle);
-            const [nwx, nwy] = screenToWorld(sx, sy);
-            view.x += wx - nwx;
-            view.y += wy - nwy;
+            const [ax, ay] = twoHandGrabStart.anchorWorld;
+            [view.x, view.y] = solveViewOffsetForAnchor(ax, ay, sx, sy);
           },
           onGrabState: (state) => {
             canvas.classList.toggle('dragging', state !== 'idle');
