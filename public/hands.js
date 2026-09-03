@@ -18,6 +18,7 @@
   const PINCH_THRESHOLD = 0.055;
   const FIST_TIP_INDICES = [8, 12, 16, 20]; // index/middle/ring/pinky fingertips
   const FIST_RATIO = 1.3; // fist = fingertip-to-wrist distance < palm size * this ratio
+  const OTHER_FINGER_TIPS = [12, 16, 20]; // middle/ring/pinky, checked to rule out a closing fist
 
   let hands = null;
   let stream = null;
@@ -44,8 +45,15 @@
     return { x: 1 - (w.x + m.x) / 2, y: (w.y + m.y) / 2 };
   }
 
+  // A pinch is an "OK sign": thumb+index tip touching AND the other three fingers still
+  // extended. Checking touch alone isn't enough — a closing fist also brings thumb and index
+  // close together, so requiring the other fingers to stay open keeps pinch and fist from
+  // being confused for one another.
   function isPinching(landmarks) {
-    return dist(landmarks[4], landmarks[8]) < PINCH_THRESHOLD;
+    if (dist(landmarks[4], landmarks[8]) >= PINCH_THRESHOLD) return false;
+    const size = dist(landmarks[0], landmarks[9]) || 0.0001;
+    const extended = OTHER_FINGER_TIPS.filter((tip) => dist(landmarks[tip], landmarks[0]) >= size * FIST_RATIO).length;
+    return extended >= 2;
   }
 
   // Detect a fist by whether the fingertips have curled back near the wrist, normalized by
