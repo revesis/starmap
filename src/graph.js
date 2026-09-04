@@ -127,6 +127,45 @@ function computeLastCommitStats(rootDir) {
   return stats;
 }
 
+// A window of commit history for the frontend's time dial: each commit's timestamp plus which
+// files it touched (and how many lines), so the dial can highlight "what changed" as of some
+// earlier point instead of only the latest commit. Deliberately paged (limit + optional
+// `beforeIso` cursor) rather than loading the whole history at once — a large repo's full log
+// would be slow, and the dial only ever needs the window currently in view.
+function commitHistoryWindow(rootDir, beforeIso, limit) {
+  const commits = [];
+  let hasMore = false;
+  try {
+    const args = ['-C', rootDir, 'log', '-n', String(limit + 1), '--numstat', '--pretty=format:@@%H|%ct'];
+    if (beforeIso) args.push(`--before=${beforeIso}`);
+    const out = execFileSync('git', args, { maxBuffer: 1024 * 1024 * 64 }).toString('utf8');
+    let current = null;
+    for (const line of out.split('\n')) {
+      if (line.startsWith('@@')) {
+        if (current) commits.push(current);
+        const [sha, ts] = line.slice(2).split('|');
+        current = { sha, time: parseInt(ts, 10) * 1000, files: [] };
+        continue;
+      }
+      const trimmed = line.trim();
+      if (!trimmed || !current) continue;
+      const [addedStr, deletedStr, rel] = trimmed.split('\t');
+      if (!rel) continue;
+      const added = addedStr === '-' ? 0 : parseInt(addedStr, 10) || 0;
+      const deleted = deletedStr === '-' ? 0 : parseInt(deletedStr, 10) || 0;
+      current.files.push({ rel, lines: added + deleted });
+    }
+    if (current) commits.push(current);
+  } catch {
+    // not a git repo, or no commits matching the window
+  }
+  if (commits.length > limit) {
+    commits.length = limit;
+    hasMore = true;
+  }
+  return { commits, hasMore };
+}
+
 function build(rootDir, files, gitRepo) {
   const fileSet = new Set(files.map((f) => f.rel));
   const sizes = files.map((f) => f.size);
@@ -207,4 +246,4 @@ function build(rootDir, files, gitRepo) {
   return { nodes, edges, maxDegree };
 }
 
-module.exports = { build, COLOR_TABLE, DEFAULT_COLOR };
+module.exports = { build, commitHistoryWindow, COLOR_TABLE, DEFAULT_COLOR };

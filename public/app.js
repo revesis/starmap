@@ -519,6 +519,18 @@
   let selectedId = null;
   let hoveredId = null;
 
+  // ---- Time dial: scrub a semicircular arc to view which files a past commit touched, instead
+  // of only ever showing the latest commit. History is loaded windowed/lazily (not the whole git
+  // log up front) — an initial window on first touch of the arc, then an older window fetched on
+  // demand as the drag reaches the window's oldest edge. `historyTouched` overrides the display
+  // (not the underlying live n.touched/n.changeRatio) while a past commit is selected.
+  let historyWindow = []; // commits, newest first: {sha, time, files:[{rel,lines}]}
+  let historyHasMore = false;
+  let historyLoading = false;
+  let historySelected = -1; // index into historyWindow, or -1 = live (not scrubbing history)
+  let historyTouched = null; // Map<fileId, lines> for the selected commit, or null when live
+  let draggingTime = false;
+
   // Pluck the string when a photon reaches its target particle along a dependency edge;
   // throttled so a dense call graph doesn't get noisy
   const lastArrivalPluck = new Map();
@@ -665,7 +677,8 @@
       // and applied only at render time — the particle's actual n.x/n.y stay exact. Meant to read
       // as intrinsic positional uncertainty (a Heisenberg-style fuzzy cloud) rather than being
       // visibly "pushed around" by anything.
-      if (n.touched) {
+      const isTouchedNow = displayTouched(n);
+      if (isTouchedNow) {
         sx += (Math.random() - 0.5) * POSITION_UNCERTAINTY_PX;
         sy += (Math.random() - 0.5) * POSITION_UNCERTAINTY_PX;
       }
@@ -683,8 +696,9 @@
         // same as before) — what n.changeRatio actually drives is how many concentric rings are
         // in flight at once (1 for a tiny tweak, up to WAVE_MAX_RINGS for a near-total rewrite),
         // so "how big was this change" reads as density rather than brightness.
-        const ringCount = n.changeRatio > 0
-          ? Math.min(WAVE_MAX_RINGS, Math.max(1, Math.round(1 + n.changeRatio * (WAVE_MAX_RINGS - 1))))
+        const displayRatio = displayChangeRatio(n);
+        const ringCount = displayRatio > 0
+          ? Math.min(WAVE_MAX_RINGS, Math.max(1, Math.round(1 + displayRatio * (WAVE_MAX_RINGS - 1))))
           : 0;
         for (let i = 0; i < ringCount; i++) {
           const wave = ((t * 0.5 + n.phase / (Math.PI * 2) + i / ringCount) % 1);
@@ -805,6 +819,7 @@
 
     drawRulers();
     drawCompassDial();
+    drawTimeArc();
   }
 
   // ---- Reference rulers: fixed in screen space, follow pan/zoom, unaffected by rotation (measures "distance from screen center") ----
@@ -913,6 +928,151 @@
     ctx.textAlign = 'left';
   }
 
+  // ---- Time dial: a wide semicircular arc along the bottom edge (distinct from the small
+  // compass ring above it — tick marks instead of a heading needle), spanning [PI, 2*PI] with
+  // the oldest loaded commit on the left and "now" on the right ----
+  const TIME_ARC_BAND = 16; // how close to the arc counts as a hit, for dragging
+  function timeArcCenter() {
+    return [cssW / 2, cssH];
+  }
+  function timeArcRadius() {
+    return Math.max(80, Math.min(190, cssH * 0.4, cssW * 0.42));
+  }
+  function isInTimeArc(sx, sy) {
+    const [cx, cy] = timeArcCenter();
+    if (sy > cy + 4) return false; // only the visible upper half
+    const d = Math.hypot(sx - cx, sy - cy);
+    return Math.abs(d - timeArcRadius()) <= TIME_ARC_BAND;
+  }
+  function timeAngleFor(sx, sy) {
+    const [cx, cy] = timeArcCenter();
+    let a = Math.atan2(sy - cy, sx - cx);
+    if (a < 0) a += Math.PI * 2; // normalize atan2's [-PI,PI] into [0,2PI]
+    return Math.min(Math.PI * 2, Math.max(Math.PI, a));
+  }
+  function timeForAngle(angle) {
+    if (historyWindow.length < 2) return historyWindow.length ? historyWindow[0].time : Date.now();
+    const oldest = historyWindow[historyWindow.length - 1].time;
+    const newest = historyWindow[0].time;
+    const t = (angle - Math.PI) / Math.PI; // 0 at left (oldest) .. 1 at right (newest)
+    return oldest + t * (newest - oldest);
+  }
+  function angleForTime(time) {
+    if (historyWindow.length < 2) return Math.PI * 2;
+    const oldest = historyWindow[historyWindow.length - 1].time;
+    const newest = historyWindow[0].time;
+    if (newest === oldest) return Math.PI * 2;
+    const t = (time - oldest) / (newest - oldest);
+    return Math.PI + Math.min(1, Math.max(0, t)) * Math.PI;
+  }
+
+  function drawTimeArc() {
+    if (!gitRepo) return;
+    const [cx, cy] = timeArcCenter();
+    const R = timeArcRadius();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, Math.PI, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(214,245,255,0.18)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Tick marks: one per loaded commit, distinct from the compass's heading-needle look
+    for (let i = 0; i < historyWindow.length; i++) {
+      const a = angleForTime(historyWindow[i].time);
+      const isSel = i === historySelected;
+      const inner = R - (isSel ? 10 : 6);
+      const outer = R + (isSel ? 4 : 0);
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
+      ctx.lineTo(cx + Math.cos(a) * outer, cy + Math.sin(a) * outer);
+      ctx.strokeStyle = isSel ? 'rgba(255,255,255,0.9)' : 'rgba(109,240,255,0.45)';
+      ctx.lineWidth = isSel ? 2 : 1;
+      ctx.stroke();
+    }
+
+    // The live/"now" end, always at the right tip
+    ctx.beginPath();
+    ctx.arc(cx + R, cy, historySelected === -1 ? 4 : 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = historySelected === -1 ? 'rgba(255,255,255,0.95)' : 'rgba(109,240,255,0.5)';
+    ctx.fill();
+
+    ctx.textAlign = 'center';
+    ctx.font = '9px sans-serif';
+    if (historySelected >= 0 && historyWindow[historySelected]) {
+      const c = historyWindow[historySelected];
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillText(c.sha.slice(0, 7) + ' · ' + new Date(c.time).toLocaleDateString(), cx, cy - R - 8);
+    } else if (draggingTime && historyLoading) {
+      ctx.fillStyle = 'rgba(143,184,194,0.85)';
+      ctx.fillText('loading history…', cx, cy - R - 8);
+    } else {
+      ctx.fillStyle = 'rgba(143,184,194,0.6)';
+      ctx.fillText('drag the outer arc to time-travel', cx, cy - R - 8);
+    }
+    ctx.textAlign = 'left';
+  }
+
+  async function loadHistoryWindow(beforeIso) {
+    if (historyLoading) return;
+    historyLoading = true;
+    try {
+      let url = '/api/history?limit=80';
+      if (beforeIso) url += '&before=' + encodeURIComponent(beforeIso);
+      const res = await fetch(url);
+      const data = await res.json();
+      historyWindow = beforeIso ? historyWindow.concat(data.commits) : data.commits;
+      historyHasMore = data.hasMore;
+    } catch {
+      // leave whatever window we already had
+    } finally {
+      historyLoading = false;
+    }
+  }
+
+  // Selecting a commit only overrides how touched/changeRatio are *displayed* (see displayTouched
+  // / displayChangeRatio in draw()) — it never rewrites n.touched/n.changeRatio, which stay the
+  // live values refreshTouchedFiles maintains, so returning to "now" needs no re-fetch.
+  function selectHistoryIndex(i) {
+    if (i <= 0) {
+      historySelected = -1;
+      historyTouched = null;
+      return;
+    }
+    historySelected = i;
+    const commit = historyWindow[i];
+    historyTouched = new Map(commit.files.map((f) => [f.rel, f.lines]));
+  }
+
+  function handleTimeDrag(sx, sy) {
+    if (!historyWindow.length) return;
+    const angle = timeAngleFor(sx, sy);
+    // Reached the oldest loaded edge with more history available: page in an older window
+    if (angle <= Math.PI + 0.02 && historyHasMore && !historyLoading) {
+      loadHistoryWindow(new Date(historyWindow[historyWindow.length - 1].time).toISOString());
+    }
+    const target = timeForAngle(angle);
+    let best = 0;
+    let bestDiff = Infinity;
+    for (let i = 0; i < historyWindow.length; i++) {
+      const diff = Math.abs(historyWindow[i].time - target);
+      if (diff < bestDiff) { bestDiff = diff; best = i; }
+    }
+    selectHistoryIndex(best);
+  }
+
+  function displayTouched(n) {
+    return historyTouched ? historyTouched.has(n.id) : n.touched;
+  }
+  function displayChangeRatio(n) {
+    if (!historyTouched) return n.changeRatio;
+    const lines = historyTouched.get(n.id);
+    if (lines === undefined) return 0;
+    // No historical file-size snapshot on the client, so approximate against current size
+    // instead of the real "fraction of this file's lines" changeRatio uses for the live commit
+    return Math.min(1, lines / Math.max(20, n.size / 30));
+  }
+
   // Ambient sound field: every particle can sustain a tone, but only the batch nearest the
   // screen center gets picked (bounded voices), throttled to recompute every ~200ms instead
   // of sorting all particles every frame
@@ -985,6 +1145,12 @@
       view.rotation = 0;
       return;
     }
+    if (isInTimeArc(sx, sy)) {
+      draggingTime = true;
+      if (!historyWindow.length) loadHistoryWindow();
+      else handleTimeDrag(sx, sy);
+      return;
+    }
     const hit = pickNode(sx, sy);
     dragMoved = false;
     if (hit) {
@@ -1002,7 +1168,10 @@
     const ddy = e.clientY - lastMouse[1];
     if (Math.abs(ddx) > 2 || Math.abs(ddy) > 2) dragMoved = true;
 
-    if (dragNode) {
+    if (draggingTime) {
+      const rect = canvas.getBoundingClientRect();
+      handleTimeDrag(e.clientX - rect.left, e.clientY - rect.top);
+    } else if (dragNode) {
       const rect = canvas.getBoundingClientRect();
       const [wx, wy] = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
       dragNode.x = wx;
@@ -1033,6 +1202,10 @@
   });
 
   window.addEventListener('mouseup', (e) => {
+    if (draggingTime) {
+      draggingTime = false;
+      return;
+    }
     if (dragNode && !dragMoved) {
       selectNode(dragNode);
     } else if (!dragNode && !dragging) {
@@ -1077,6 +1250,12 @@
         view.rotation = 0;
         return;
       }
+      if (isInTimeArc(sx, sy)) {
+        draggingTime = true;
+        if (!historyWindow.length) loadHistoryWindow();
+        else handleTimeDrag(sx, sy);
+        return;
+      }
       const hit = pickNode(sx, sy);
       dragMoved = false;
       if (hit) {
@@ -1104,7 +1283,10 @@
 
   canvas.addEventListener('touchmove', (e) => {
     e.preventDefault();
-    if (e.touches.length === 1 && !pinch) {
+    if (draggingTime && e.touches.length === 1) {
+      const [sx, sy] = touchScreenPoint(e.touches[0]);
+      handleTimeDrag(sx, sy);
+    } else if (e.touches.length === 1 && !pinch) {
       const t = e.touches[0];
       const ddx = t.clientX - lastMouse[0];
       const ddy = t.clientY - lastMouse[1];
@@ -1140,6 +1322,10 @@
 
   canvas.addEventListener('touchend', (e) => {
     if (e.touches.length === 0) {
+      if (draggingTime) {
+        draggingTime = false;
+        return;
+      }
       if (dragNode && !dragMoved) {
         selectNode(dragNode);
       } else if (dragging && !dragMoved) {

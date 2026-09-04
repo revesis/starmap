@@ -7,7 +7,7 @@ const { execFile } = require('child_process');
 const { URL } = require('url');
 
 const { scan } = require('./scan');
-const { build } = require('./graph');
+const { build, commitHistoryWindow } = require('./graph');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = {
@@ -72,6 +72,15 @@ function createRequestHandler(rootDir) {
     if (url.pathname === '/api/refresh' && req.method === 'POST') {
       cached = null;
       sendJson(res, 200, getGraph());
+      return;
+    }
+
+    if (url.pathname === '/api/history') {
+      const before = url.searchParams.get('before');
+      const limitParam = parseInt(url.searchParams.get('limit'), 10);
+      const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 60;
+      const { commits, hasMore } = commitHistoryWindow(rootDir, before, limit);
+      sendJson(res, 200, { commits, hasMore });
       return;
     }
 
