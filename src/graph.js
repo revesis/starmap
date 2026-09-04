@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const resolvers = require('./resolvers');
 
 // extension -> color (the particle's "element" color)
 const COLOR_TABLE = {
@@ -37,59 +38,6 @@ const COLOR_TABLE = {
   '.dart': '#00b4ab',
 };
 const DEFAULT_COLOR = '#7a7a7a';
-
-const RESOLVABLE_EXT = ['', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.json', '.py'];
-const INDEX_NAMES = ['index.js', 'index.ts', 'index.jsx', 'index.tsx', '__init__.py'];
-
-// "reference another file" syntax across languages — only matches relative-path
-// imports (skips third-party packages / stdlib)
-const IMPORT_PATTERNS = [
-  /\bimport\s+(?:[^'"]+?\s+from\s+)?['"](\.[^'"]+)['"]/g, // import x from './y'
-  /\brequire\(\s*['"](\.[^'"]+)['"]\s*\)/g, // require('./y')
-  /\bimport\(\s*['"](\.[^'"]+)['"]\s*\)/g, // dynamic import('./y')
-  /^\s*from\s+(\.+[\w.]*)\s+import\b/gm, // python: from .y import z
-  /^\s*import\s+(\.+[\w.]+)/gm, // python: import .y (rare but handled)
-  // dart: import/export/part 'foo.dart' — unlike JS, a same-package relative reference is
-  // usually written *without* a leading './', so this can't require a dot prefix like the JS
-  // pattern above; instead it excludes the two non-relative schemes (package:, dart:) and
-  // requires the literal .dart extension (which Dart imports, unlike JS, always spell out)
-  /\b(?:import|export|part)\s+['"]((?!package:)(?!dart:)[^'"]+\.dart)['"]/g,
-];
-
-function extractRelativeImports(content) {
-  const specs = [];
-  for (const re of IMPORT_PATTERNS) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(content))) {
-      specs.push(m[1]);
-    }
-  }
-  return specs;
-}
-
-function resolveImport(fromRel, spec, fileSet) {
-  const fromDir = path.posix.dirname(fromRel);
-  // Python-style dotted relative import, convert to a path separator
-  let normSpec = spec;
-  if (/^\.+[\w.]*$/.test(spec) && !spec.includes('/')) {
-    const dots = spec.match(/^\.+/)[0].length;
-    const rest = spec.slice(dots).replace(/\./g, '/');
-    const up = '../'.repeat(dots - 1);
-    normSpec = (dots > 1 ? up : './') + rest;
-  }
-  const basePath = path.posix.normalize(path.posix.join(fromDir, normSpec));
-
-  for (const ext of RESOLVABLE_EXT) {
-    const candidate = basePath + ext;
-    if (fileSet.has(candidate)) return candidate;
-  }
-  for (const idx of INDEX_NAMES) {
-    const candidate = path.posix.join(basePath, idx);
-    if (fileSet.has(candidate)) return candidate;
-  }
-  return null;
-}
 
 function sizeToRadius(size, minSize, maxSize) {
   const MIN_R = 3;
@@ -231,10 +179,10 @@ function build(rootDir, files, gitRepo) {
 
   const edgeSet = new Set();
   const edges = [];
-  const codeExts = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.dart']);
 
   for (const f of files) {
-    if (!codeExts.has(f.ext)) continue;
+    const resolver = resolvers.byExt.get(f.ext);
+    if (!resolver) continue;
     let content;
     try {
       content = fs.readFileSync(f.abs, 'utf8');
@@ -243,9 +191,9 @@ function build(rootDir, files, gitRepo) {
     }
     if (isProbablyBinary(content)) continue;
 
-    const specs = extractRelativeImports(content);
+    const specs = resolver.extractSpecs(content);
     for (const spec of specs) {
-      const target = resolveImport(f.rel, spec, fileSet);
+      const target = resolver.resolve(f.rel, spec, fileSet);
       if (!target || target === f.rel) continue;
       const key = f.rel + '=>' + target;
       if (edgeSet.has(key)) continue;
