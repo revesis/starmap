@@ -928,42 +928,64 @@
     ctx.textAlign = 'left';
   }
 
-  // ---- Time dial: a wide semicircular arc along the bottom edge (distinct from the small
-  // compass ring above it — tick marks instead of a heading needle), spanning [PI, 2*PI] with
-  // the oldest loaded commit on the left and "now" on the right ----
-  const TIME_ARC_BAND = 16; // how close to the arc counts as a hit, for dragging
-  function timeArcCenter() {
-    return [cssW / 2, cssH];
-  }
+  // ---- Time dial: a compact, self-contained arch near the bottom edge (distinct from the small
+  // compass ring above it — tick marks + a grabbable handle instead of a heading needle). Fixed
+  // on-screen width and a ~140° span (not a full semicircle) so it reads as a discrete widget
+  // rather than a thin line running the width of the screen; oldest loaded commit is the left
+  // leg, "now" is the right leg. ----
+  const ARCH_WIDTH = 340; // on-screen distance between the two legs of the arch
+  const ARCH_SPAN = (140 * Math.PI) / 180; // total angular sweep
+  const ARCH_BASE_MARGIN = 22; // gap between the arch's legs and the screen's bottom edge
+  const ARCH_MIN_THETA = -Math.PI / 2 - ARCH_SPAN / 2; // left leg
+  const ARCH_MAX_THETA = -Math.PI / 2 + ARCH_SPAN / 2; // right leg ("now")
+  const TIME_ARC_BAND = 22; // how close to the arch counts as a hit, for dragging — generous, plus the handle has its own larger hit radius
+  const TIME_HANDLE_HIT_R = 22;
   function timeArcRadius() {
-    return Math.max(80, Math.min(190, cssH * 0.4, cssW * 0.42));
+    // half-width = R * sin(ARCH_SPAN/2) (the horizontal offset of each leg from the arch's apex)
+    return Math.min(ARCH_WIDTH / (2 * Math.sin(ARCH_SPAN / 2)), cssW * 0.42);
+  }
+  function timeArcCenter() {
+    const R = timeArcRadius();
+    // Solve cy so the legs (at ARCH_MIN/MAX_THETA) land exactly ARCH_BASE_MARGIN above the bottom edge
+    const legY = R * Math.sin(ARCH_MIN_THETA);
+    return [cssW / 2, cssH - ARCH_BASE_MARGIN - legY];
+  }
+  function timeHandlePoint(theta) {
+    const [cx, cy] = timeArcCenter();
+    const R = timeArcRadius();
+    return [cx + Math.cos(theta) * R, cy + Math.sin(theta) * R];
+  }
+  function currentTimeTheta() {
+    return historySelected === -1 ? ARCH_MAX_THETA : angleForTime(historyWindow[historySelected].time);
   }
   function isInTimeArc(sx, sy) {
     const [cx, cy] = timeArcCenter();
-    if (sy > cy + 4) return false; // only the visible upper half
+    const [hx, hy] = timeHandlePoint(currentTimeTheta());
+    if (Math.hypot(sx - hx, sy - hy) <= TIME_HANDLE_HIT_R) return true; // grab the handle directly
+    const theta = Math.atan2(sy - cy, sx - cx);
+    if (theta < ARCH_MIN_THETA - 0.05 || theta > ARCH_MAX_THETA + 0.05) return false;
     const d = Math.hypot(sx - cx, sy - cy);
     return Math.abs(d - timeArcRadius()) <= TIME_ARC_BAND;
   }
   function timeAngleFor(sx, sy) {
     const [cx, cy] = timeArcCenter();
-    let a = Math.atan2(sy - cy, sx - cx);
-    if (a < 0) a += Math.PI * 2; // normalize atan2's [-PI,PI] into [0,2PI]
-    return Math.min(Math.PI * 2, Math.max(Math.PI, a));
+    const a = Math.atan2(sy - cy, sx - cx);
+    return Math.min(ARCH_MAX_THETA, Math.max(ARCH_MIN_THETA, a));
   }
   function timeForAngle(angle) {
     if (historyWindow.length < 2) return historyWindow.length ? historyWindow[0].time : Date.now();
     const oldest = historyWindow[historyWindow.length - 1].time;
     const newest = historyWindow[0].time;
-    const t = (angle - Math.PI) / Math.PI; // 0 at left (oldest) .. 1 at right (newest)
+    const t = (angle - ARCH_MIN_THETA) / ARCH_SPAN; // 0 at left (oldest) .. 1 at right (newest)
     return oldest + t * (newest - oldest);
   }
   function angleForTime(time) {
-    if (historyWindow.length < 2) return Math.PI * 2;
+    if (historyWindow.length < 2) return ARCH_MAX_THETA;
     const oldest = historyWindow[historyWindow.length - 1].time;
     const newest = historyWindow[0].time;
-    if (newest === oldest) return Math.PI * 2;
+    if (newest === oldest) return ARCH_MAX_THETA;
     const t = (time - oldest) / (newest - oldest);
-    return Math.PI + Math.min(1, Math.max(0, t)) * Math.PI;
+    return ARCH_MIN_THETA + Math.min(1, Math.max(0, t)) * ARCH_SPAN;
   }
 
   function drawTimeArc() {
@@ -972,9 +994,9 @@
     const R = timeArcRadius();
 
     ctx.beginPath();
-    ctx.arc(cx, cy, R, Math.PI, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(214,245,255,0.18)';
-    ctx.lineWidth = 1;
+    ctx.arc(cx, cy, R, ARCH_MIN_THETA, ARCH_MAX_THETA);
+    ctx.strokeStyle = 'rgba(214,245,255,0.22)';
+    ctx.lineWidth = 2;
     ctx.stroke();
 
     // Tick marks: one per loaded commit, distinct from the compass's heading-needle look
@@ -991,11 +1013,20 @@
       ctx.stroke();
     }
 
-    // The live/"now" end, always at the right tip
+    // Grabbable handle: sits on the arch at the current selection ("now" when live)
+    const [hx, hy] = timeHandlePoint(currentTimeTheta());
+    const handleR = draggingTime ? 9 : 7;
     ctx.beginPath();
-    ctx.arc(cx + R, cy, historySelected === -1 ? 4 : 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = historySelected === -1 ? 'rgba(255,255,255,0.95)' : 'rgba(109,240,255,0.5)';
+    ctx.arc(hx, hy, handleR + 4, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(109,240,255,0.15)';
     ctx.fill();
+    ctx.beginPath();
+    ctx.arc(hx, hy, handleR, 0, Math.PI * 2);
+    ctx.fillStyle = historySelected === -1 ? 'rgba(255,255,255,0.95)' : 'rgba(109,240,255,0.85)';
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(214,245,255,0.9)';
+    ctx.stroke();
 
     ctx.textAlign = 'center';
     ctx.font = '9px sans-serif';
@@ -1048,7 +1079,7 @@
     if (!historyWindow.length) return;
     const angle = timeAngleFor(sx, sy);
     // Reached the oldest loaded edge with more history available: page in an older window
-    if (angle <= Math.PI + 0.02 && historyHasMore && !historyLoading) {
+    if (angle <= ARCH_MIN_THETA + 0.02 && historyHasMore && !historyLoading) {
       loadHistoryWindow(new Date(historyWindow[historyWindow.length - 1].time).toISOString());
     }
     const target = timeForAngle(angle);
