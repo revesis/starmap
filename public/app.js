@@ -532,7 +532,7 @@
       }
     }
 
-    // Particles (files): drawn as "photons" — ripples (wave side) + halo + white-hot core (particle side)
+    // Particles (files): drawn as "photons" — halo + white-hot core
     for (const n of nodes) {
       // Skip entirely before a spawn-in starts or after a despawn-out finishes; otherwise scale
       // toward/away from zero radius rather than popping to full size or vanishing instantly.
@@ -549,19 +549,6 @@
       const emphasize = n.id === selectedId || n.id === hoveredId;
 
       if (!dense) {
-        // Wave side: an outward-expanding, gradually fading wavefront
-        for (let i = 0; i < 2; i++) {
-          const wave = ((t * 0.5 + n.phase / (Math.PI * 2) + i * 0.5) % 1);
-          const waveR = r + wave * r * 3.2;
-          const waveAlpha = (1 - wave) * 0.22 * (n.intensity * 0.6 + 0.4);
-          if (waveAlpha <= 0.005) continue;
-          ctx.beginPath();
-          ctx.arc(sx, sy, waveR, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(${rgbStr},${waveAlpha.toFixed(3)})`;
-          ctx.lineWidth = 1;
-          ctx.stroke();
-        }
-
         // Halo: radial gradient, the brighter the particle the bigger its glow
         const haloR = r * (3 + n.intensity * 2.5);
         const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, haloR);
