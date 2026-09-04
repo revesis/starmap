@@ -364,12 +364,13 @@
     const cellSize = 80;
     const grid = buildGrid(cellSize);
     const REPULSE = 900;
+    const GRAVITY = 15; // real mass-based attraction, layered on top of REPULSE (see below)
     const SPRING = 0.02;
     const SPRING_LEN = 70;
     const CENTER_PULL = 0.004;
     const DAMPING = 0.82;
 
-    // Repulsion: only compare within the same cell and neighboring cells
+    // Repulsion + gravity: only compare within the same cell and neighboring cells
     for (const n of nodes) {
       if (n.fixed) continue;
       const gx = Math.floor(n.x / cellSize);
@@ -390,6 +391,15 @@
             const force = REPULSE / distSq;
             fx += (ddx / dist) * force;
             fy += (ddy / dist) * force;
+            // Real gravity, F = G*m1*m2/r² — unlike the gravity-well grid warp (a pure visual
+            // effect that never touches particle positions), this actually pulls particles
+            // toward each other, scaled by BOTH particles' massFactor. Kept to the same
+            // neighbor-only range as repulsion above (not a true O(n²) all-pairs force) and kept
+            // small relative to REPULSE so it nudges rather than overriding the packing/spacing
+            // repulsion already provides.
+            const g = (GRAVITY * massFactor(n) * massFactor(other)) / distSq;
+            fx -= (ddx / dist) * g;
+            fy -= (ddy / dist) * g;
           }
         }
       }
