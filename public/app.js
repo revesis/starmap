@@ -61,6 +61,9 @@
   let edges = [];
   let gitRepo = false;
   let nodeById = new Map();
+  let edgeKeys = new Set(); // "source=>target" for edges already added, so refresh-time merges can dedupe cheaply
+  let clusterCenters = new Map(); // dir -> {x, y}, persisted across refreshes so new files in a known dir join it
+  let clusterR = 260;
 
   // View transform: world coords <-> screen coords (CSS pixel space, matching mouse events and canvas size units)
   // rotation: view rotation angle (radians), 0 = normal orientation
@@ -129,42 +132,114 @@
   // Periodically re-scans (via /api/refresh) and checks each particle's discrete energy level.
   // Unlike the continuous entropy jitter, a level only changes in whole steps — when it does, we
   // flag a brief flash instead of interpolating, the visual analogue of a quantum jump rather
-  // than thermal noise.
+  // than thermal noise. Any file the current node list doesn't know about yet is handed to
+  // spawnIncomingNodes as a batch, since new files tend to arrive in bursts (a save-all, a
+  // generated batch of files, etc.) rather than one at a time.
   const ENERGY_REFRESH_MS = 20000;
   const ENERGY_FLASH_MS = 700;
+  const MAX_BATCH_PLUCKS = 6; // cap concurrent arrival/jump sounds so a burst of files isn't a chord
+  let plucksThisBatch = 0;
+  function throttledPluck(n) {
+    if (!audioEnabled || plucksThisBatch >= MAX_BATCH_PLUCKS) return;
+    plucksThisBatch++;
+    window.CosmosAudio && window.CosmosAudio.pluck(n);
+  }
   async function refreshEnergyLevels() {
     try {
       const res = await fetch('/api/refresh', { method: 'POST' });
       const data = await res.json();
+      plucksThisBatch = 0;
+      const incoming = [];
       for (const updated of data.nodes) {
         const n = nodeById.get(updated.id);
-        if (!n) continue; // new/removed files: out of scope here, full graph rebuild handles that on reload
+        if (!n) { incoming.push(updated); continue; }
         n.entropy = updated.entropy;
         n.churn = updated.churn;
         const newLevel = energyLevelFor(n.entropy);
         if (newLevel !== n.energyLevel) {
           n.energyLevel = newLevel;
           n.flashUntil = performance.now() + ENERGY_FLASH_MS;
-          if (audioEnabled) window.CosmosAudio && window.CosmosAudio.pluck(n);
+          throttledPluck(n);
         }
       }
+      if (incoming.length) spawnIncomingNodes(incoming, data.edges);
     } catch {
       // a failed refresh just means we try again next interval
     }
   }
 
+  // New files arrive as a batch: give each a staggered entrance (grows in over NEW_FILE_SPAWN_MS,
+  // starting NEW_FILE_STAGGER_MS after the previous one) instead of popping in all at once, and
+  // wire up any edges that now connect two known nodes. Existing-node edges were already added at
+  // load time, so only edges touching the new batch can possibly be missing.
+  const NEW_FILE_STAGGER_MS = 60;
+  const NEW_FILE_SPAWN_MS = 900;
+  function spawnIncomingNodes(rawNodes, allEdges) {
+    const now = performance.now();
+    rawNodes.forEach((raw, i) => {
+      const c = clusterCenterFor(raw.dir);
+      const jitter = 120;
+      const spawnAt = now + i * NEW_FILE_STAGGER_MS;
+      const n = {
+        ...raw,
+        x: c.x + (Math.random() - 0.5) * jitter,
+        y: c.y + (Math.random() - 0.5) * jitter,
+        vx: 0,
+        vy: 0,
+        cx: c.x,
+        cy: c.y,
+        fixed: false,
+        phase: Math.random() * Math.PI * 2,
+        twinkleSpeed: 0.6 + Math.random() * 1.2 + (raw.entropy || 0) * 2,
+        mass: raw.radius + raw.degree * 6,
+        energyLevel: energyLevelFor(raw.entropy),
+        flashUntil: 0,
+        spawnAt,
+        spawnDoneAt: spawnAt + NEW_FILE_SPAWN_MS,
+      };
+      nodes.push(n);
+      nodeById.set(n.id, n);
+      setTimeout(() => throttledPluck(n), i * NEW_FILE_STAGGER_MS);
+    });
+
+    for (const e of allEdges) {
+      const key = e.source + '=>' + e.target;
+      if (edgeKeys.has(key)) continue;
+      const s = nodeById.get(e.source);
+      const t = nodeById.get(e.target);
+      if (!s || !t) continue;
+      edgeKeys.add(key);
+      edges.push(e);
+      s.degree += 1;
+      t.degree += 1;
+    }
+
+    rootLabel.textContent = `${nodes.length} particles · ${edges.length} strings${gitRepo ? ' · git connected' : ''}`;
+  }
+
+  // A dir's cluster center is created once and kept for the life of the page, so a file arriving
+  // later in the same directory (see spawnIncomingNodes) joins its existing nebula instead of
+  // getting a brand-new one.
+  function clusterCenterFor(dir) {
+    if (!clusterCenters.has(dir)) {
+      const angle = Math.random() * Math.PI * 2;
+      clusterCenters.set(dir, { x: Math.cos(angle) * clusterR, y: Math.sin(angle) * clusterR });
+    }
+    return clusterCenters.get(dir);
+  }
+
   // ---- Layout: cluster into per-directory "nebulae", force-directed within each cluster ----
   function initLayout() {
     const dirs = [...new Set(nodes.map((n) => n.dir))];
-    const clusterCenters = new Map();
-    const R = 260 * Math.max(1, Math.sqrt(dirs.length));
+    clusterCenters = new Map();
+    clusterR = 260 * Math.max(1, Math.sqrt(dirs.length));
     dirs.forEach((d, i) => {
       const angle = (i / dirs.length) * Math.PI * 2;
-      clusterCenters.set(d, { x: Math.cos(angle) * R, y: Math.sin(angle) * R });
+      clusterCenters.set(d, { x: Math.cos(angle) * clusterR, y: Math.sin(angle) * clusterR });
     });
 
     for (const n of nodes) {
-      const c = clusterCenters.get(n.dir) || { x: 0, y: 0 };
+      const c = clusterCenterFor(n.dir);
       const jitter = 120;
       n.x = c.x + (Math.random() - 0.5) * jitter;
       n.y = c.y + (Math.random() - 0.5) * jitter;
@@ -421,8 +496,16 @@
 
     // Particles (files): drawn as "photons" — ripples (wave side) + halo + white-hot core (particle side)
     for (const n of nodes) {
+      // A newly-spawned particle (see spawnIncomingNodes) hasn't reached its staggered entrance
+      // time yet, or is still growing in — skip drawing it entirely before then, and shrink it
+      // toward zero radius while it does, rather than popping straight to full size.
+      if (n.spawnAt && t * 1000 < n.spawnAt) continue;
+      const spawnProgress = n.spawnDoneAt && t * 1000 < n.spawnDoneAt
+        ? Math.max(0, Math.min(1, (t * 1000 - n.spawnAt) / NEW_FILE_SPAWN_MS))
+        : 1;
+
       const [sx, sy] = worldToScreen(n.x, n.y);
-      const r = Math.max(n.radius * view.scale, 1.4);
+      const r = Math.max(n.radius * view.scale, 1.4) * spawnProgress;
       if (sx < -50 || sy < -50 || sx > cssW + 50 || sy > cssH + 50) continue;
 
       const rgb = intensityRGB(n.color, n.intensity);
@@ -494,6 +577,7 @@
       ctx.font = '11px sans-serif';
       ctx.fillStyle = 'rgba(230,230,240,0.85)';
       for (const n of nodes) {
+        if (n.spawnAt && t * 1000 < n.spawnAt) continue;
         const [sx, sy] = worldToScreen(n.x, n.y);
         const r = n.radius * view.scale;
         if (sx < -50 || sy < -50 || sx > canvas.width / devicePixelRatio + 50) continue;
@@ -968,6 +1052,7 @@
     edges = data.edges;
     gitRepo = data.gitRepo;
     nodeById = new Map(nodes.map((n) => [n.id, n]));
+    edgeKeys = new Set(edges.map((e) => e.source + '=>' + e.target));
 
     rootLabel.textContent = `${nodes.length} particles · ${edges.length} strings${gitRepo ? ' · git connected' : ''}`;
     statsEl.textContent = `Max degree: ${data.maxDegree}`;

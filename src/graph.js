@@ -97,8 +97,19 @@ function isProbablyBinary(content) {
   return content.indexOf(String.fromCharCode(0)) !== -1;
 }
 
-// Entropy: approximate "how chaotic/often-changed is this file" using its commit churn count
+// Entropy: approximate "how chaotic/often-changed is this file" using its commit churn count.
+// This shells out to `git log` over the last 3000 commits, which is by far the most expensive
+// part of a rebuild — cached for a few seconds so callers that rebuild often (e.g. the frontend's
+// periodic /api/refresh poll) don't re-walk the whole commit history on every call. Commit
+// history changes far less often than the file list does, so this is safe to lag slightly behind
+// a plain file rescan.
+let churnCache = null; // { rootDir, map, computedAt }
+const CHURN_CACHE_MS = 20000;
+
 function computeChurn(rootDir) {
+  if (churnCache && churnCache.rootDir === rootDir && Date.now() - churnCache.computedAt < CHURN_CACHE_MS) {
+    return churnCache.map;
+  }
   try {
     const out = execFileSync(
       'git',
@@ -111,6 +122,7 @@ function computeChurn(rootDir) {
       if (!rel) continue;
       counts.set(rel, (counts.get(rel) || 0) + 1);
     }
+    churnCache = { rootDir, map: counts, computedAt: Date.now() };
     return counts;
   } catch {
     return new Map();
