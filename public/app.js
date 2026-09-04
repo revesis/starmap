@@ -498,6 +498,8 @@
     }
   }
 
+  const WAVE_MAX_RINGS = 9; // concentric rings shown for a near-total rewrite of a file
+
   function draw() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#05060d';
@@ -559,21 +561,23 @@
 
       if (!dense) {
         // Wave: a persistent "still part of the latest commit" indicator, shown only on touched
-        // particles — strength tracks n.changeRatio (what fraction of THIS file's own lines the
-        // latest commit rewrote), so a near-total rewrite ripples strongly and a one-line tweak
-        // to a huge file barely shows, regardless of how big the rest of the repo is.
-        if (n.changeRatio > 0) {
-          for (let i = 0; i < 2; i++) {
-            const wave = ((t * 0.5 + n.phase / (Math.PI * 2) + i * 0.5) % 1);
-            const waveR = r + wave * r * 3.2;
-            const waveAlpha = (1 - wave) * 0.5 * n.changeRatio;
-            if (waveAlpha <= 0.005) continue;
-            ctx.beginPath();
-            ctx.arc(sx, sy, waveR, 0, Math.PI * 2);
-            ctx.strokeStyle = `rgba(${rgbStr},${waveAlpha.toFixed(3)})`;
-            ctx.lineWidth = 1;
-            ctx.stroke();
-          }
+        // particles. Visibility per ring is fixed (each ring still fades as it expands outward,
+        // same as before) — what n.changeRatio actually drives is how many concentric rings are
+        // in flight at once (1 for a tiny tweak, up to WAVE_MAX_RINGS for a near-total rewrite),
+        // so "how big was this change" reads as density rather than brightness.
+        const ringCount = n.changeRatio > 0
+          ? Math.min(WAVE_MAX_RINGS, Math.max(1, Math.round(1 + n.changeRatio * (WAVE_MAX_RINGS - 1))))
+          : 0;
+        for (let i = 0; i < ringCount; i++) {
+          const wave = ((t * 0.5 + n.phase / (Math.PI * 2) + i / ringCount) % 1);
+          const waveR = r + wave * r * 3.2;
+          const waveAlpha = (1 - wave) * 0.35;
+          if (waveAlpha <= 0.005) continue;
+          ctx.beginPath();
+          ctx.arc(sx, sy, waveR, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(${rgbStr},${waveAlpha.toFixed(3)})`;
+          ctx.lineWidth = 1;
+          ctx.stroke();
         }
 
         // Halo: radial gradient, the brighter the particle the bigger its glow
