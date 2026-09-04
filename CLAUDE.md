@@ -37,9 +37,12 @@ starmap [dir] [--port 4550] [--https]
   walk skipping `.git`/`node_modules`/etc.
 - `src/graph.js` — the core model builder (`build(rootDir, files, gitRepo)`):
   - `COLOR_TABLE` maps extension → color; `sizeToRadius` linearly maps file size → particle radius (clamped).
-  - Dependency resolution is regex-based (`IMPORT_PATTERNS`) and only handles **relative-path**
-    import/require in JS/JSX/TS/TSX/MJS/CJS/Python — no `node_modules`/package resolution, no real
-    call graph. This is a known/accepted scope limit (see README "Current scope").
+  - Dependency resolution is regex-based, one module per language under `src/resolvers/`
+    (`javascript.js`, `python.js`, `dart.js`, dispatched by extension via `src/resolvers/index.js`'s
+    `byExt` map; shared path-join/extension-search/index-lookup logic lives in `resolve-utils.js`).
+    Only handles **relative-path** import/require/export/part — no `node_modules`/`package:`
+    resolution, no real call graph. This is a known/accepted scope limit (see README "Current scope").
+    Adding a language means adding one file to `src/resolvers/`, not extending a shared regex list.
   - `computeTouchedByLastCommit` shells out to `git log -n 1 --name-only` to get a per-file boolean
     (`n.touched`, not a graded score) used for jitter and as an ambient sound intensity input.
 - `src/server.js` — `createRequestHandler(rootDir)` is shared by both HTTP and HTTPS servers. Routes:
@@ -85,7 +88,7 @@ loaded in dependency order in `index.html`: Tone.js → `audio.js` → MediaPipe
   the codebase was fully translated from Chinese for distribution).
 - `123.txt` and `big-bang-symphony.html` at the repo root are unrelated scratch files, not part of the
   project — leave them untracked/uncommitted.
-- The `IMPORT_PATTERNS`/relative-import-only resolution in `src/graph.js` and the "MVP" limitations in
+- The relative-import-only resolution in `src/resolvers/` and the "MVP" limitations in
   README.md's "Current scope" section are known, accepted gaps — don't treat them as bugs to silently fix
   without checking in first, since they trade off real complexity (e.g. full module resolution, a real
   call graph) against staying dependency-free.
