@@ -89,14 +89,13 @@
   #handPreview canvas { display: block; width: 220px; height: 165px; background: #05060d; }
 
   #hint {
+    display: none;
     position: fixed; bottom: 14px; left: 14px; z-index: 5; font-size: 10.5px; color: #6f97a0;
-    padding: 6px 12px; letter-spacing: 0.3px;
+    padding: 6px 12px; letter-spacing: 0.3px; max-width: 320px;
     background: var(--hud-bg); border: 1px solid var(--accent-dim);
     clip-path: polygon(0 8px, 8px 0, 100% 0, 100% 100%, 8px 100%, 0 calc(100% - 8px));
-    opacity: 0.4; transition: opacity .4s ease;
   }
-  #hint:hover, #hint.idle:hover { opacity: 1; }
-  #hint.idle:not(:hover) { opacity: 0.12; }
+  #hint.show { display: block; }
 
   #panel { position: fixed; top: 0; right: 0; width: 380px; max-width: 90vw; height: 100vh;
     background: linear-gradient(180deg, rgba(6,11,18,0.92), rgba(5,9,15,0.97));
@@ -154,6 +153,7 @@
       <div id="stats"></div>
       <button id="soundToggle">🔈 Music: off</button>
       <button id="handToggle">🖐️ Gestures: off</button>
+      <button id="helpToggle">❔ Help</button>
     </div>
     <div class="hud-panel">
       <p class="title" style="font-size:10px;">Legend / extensions</p>

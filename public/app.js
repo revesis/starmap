@@ -1549,14 +1549,17 @@
   // ---- VR HUD feel: auto-fades out after a period of inactivity, brightens instantly on approach/interaction ----
   const hudEl = document.getElementById('hud');
   const hintEl = document.getElementById('hint');
+  const helpToggleEl = document.getElementById('helpToggle');
+  helpToggleEl.addEventListener('click', () => {
+    hintEl.classList.toggle('show');
+    helpToggleEl.classList.toggle('on', hintEl.classList.contains('show'));
+  });
   let idleTimer = null;
   function wake() {
     hudEl.classList.remove('idle');
-    hintEl.classList.remove('idle');
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       hudEl.classList.add('idle');
-      hintEl.classList.add('idle');
     }, 3200);
   }
   ['mousemove', 'mousedown', 'wheel', 'keydown'].forEach((evt) =>
