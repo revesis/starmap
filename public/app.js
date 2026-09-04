@@ -771,6 +771,7 @@
       ctx.fillStyle = 'rgba(230,230,240,0.85)';
       for (const n of nodes) {
         if (nodePresence(n, t * 1000) <= 0) continue;
+        if (isHistoryHidden(n)) continue;
         const [sx, sy] = worldToScreen(n.x, n.y);
         const r = n.radius * view.scale;
         if (sx < -50 || sy < -50 || sx > canvas.width / devicePixelRatio + 50) continue;
@@ -1196,6 +1197,7 @@
     let best = null;
     let bestDist = Infinity;
     for (const n of nodes) {
+      if (isHistoryHidden(n)) continue;
       const dx = n.x - wx;
       const dy = n.y - wy;
       const d = Math.sqrt(dx * dx + dy * dy);
@@ -1464,7 +1466,7 @@
   searchEl.addEventListener('input', () => {
     const q = searchEl.value.trim().toLowerCase();
     if (!q) { selectedId = null; return; }
-    const hit = nodes.find((n) => n.id.toLowerCase().includes(q));
+    const hit = nodes.find((n) => !isHistoryHidden(n) && n.id.toLowerCase().includes(q));
     if (hit) {
       selectedId = hit.id;
       view.x = hit.x;
