@@ -1283,17 +1283,23 @@
       return;
     }
     if (dragNode && !dragMoved) {
-      selectNode(dragNode);
+      highlightNode(dragNode);
     } else if (!dragNode && !dragging) {
       // no-op
     } else if (dragging && !dragMoved) {
       const rect = canvas.getBoundingClientRect();
       const hit = pickNode(e.clientX - rect.left, e.clientY - rect.top);
-      if (hit) selectNode(hit);
+      if (hit) highlightNode(hit);
     }
     dragNode = null;
     dragging = false;
     canvas.classList.remove('dragging');
+  });
+
+  canvas.addEventListener('dblclick', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const hit = pickNode(e.clientX - rect.left, e.clientY - rect.top);
+    if (hit) openNodeDetail(hit);
   });
 
   canvas.addEventListener('wheel', (e) => {
@@ -1403,11 +1409,11 @@
         return;
       }
       if (dragNode && !dragMoved) {
-        selectNode(dragNode);
+        openNodeDetail(dragNode);
       } else if (dragging && !dragMoved) {
         const rect = canvas.getBoundingClientRect();
         const hit = pickNode(lastMouse[0] - rect.left, lastMouse[1] - rect.top);
-        if (hit) selectNode(hit);
+        if (hit) openNodeDetail(hit);
       }
       dragNode = null;
       dragging = false;
@@ -1436,7 +1442,16 @@
     }).join('\n') + '</pre>';
   }
 
-  async function selectNode(n) {
+  // A single click just highlights (selectedId drives the label + emphasis glow, no fetch) —
+  // opening the panel needs a double-click, mirroring the hand-gesture design's single-pinch
+  // (highlight) vs. double-pinch (open) split, for the same reason: a plain click/tap shouldn't
+  // trigger a network fetch and a sliding panel just from pointing at something.
+  function highlightNode(n) {
+    selectedId = n.id;
+    if (audioEnabled) window.CosmosAudio && window.CosmosAudio.pluck(n);
+  }
+
+  async function openNodeDetail(n) {
     selectedId = n.id;
     if (audioEnabled) window.CosmosAudio && window.CosmosAudio.pluck(n);
     panelTitle.textContent = n.label;
@@ -1591,7 +1606,7 @@
             const now = performance.now();
             const isDoublePinch = hit.id === lastPinchId && now - lastPinchTime < DOUBLE_PINCH_WINDOW;
             if (isDoublePinch) {
-              selectNode(hit);
+              openNodeDetail(hit);
               lastPinchId = null;
             } else {
               selectedId = hit.id;
