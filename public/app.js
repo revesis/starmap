@@ -356,6 +356,7 @@
   function buildGrid(cellSize) {
     const grid = new Map();
     for (const n of nodes) {
+      if (isHistoryHidden(n)) continue;
       const gx = Math.floor(n.x / cellSize);
       const gy = Math.floor(n.y / cellSize);
       const key = gx + ',' + gy;
@@ -381,7 +382,7 @@
 
     // Repulsion + gravity: only compare within the same cell and neighboring cells
     for (const n of nodes) {
-      if (n.fixed) continue;
+      if (n.fixed || isHistoryHidden(n)) continue;
       const gx = Math.floor(n.x / cellSize);
       const gy = Math.floor(n.y / cellSize);
       let fx = 0, fy = 0;
@@ -430,6 +431,7 @@
     // is treated as infinite mass — it can still be collided with, but never gets knocked around.
     const RESTITUTION = 0.6; // 1 = perfectly elastic bounce, 0 = particles just stop dead-on
     for (const n of nodes) {
+      if (isHistoryHidden(n)) continue;
       const gx = Math.floor(n.x / cellSize);
       const gy = Math.floor(n.y / cellSize);
       for (let dx = -1; dx <= 1; dx++) {
@@ -464,6 +466,7 @@
       const s = nodeById.get(e.source);
       const t = nodeById.get(e.target);
       if (!s || !t) continue;
+      if (isHistoryHidden(s) || isHistoryHidden(t)) continue;
       let dx = t.x - s.x;
       let dy = t.y - s.y;
       let dist = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -483,7 +486,7 @@
     // spread-out from everyone's starting jitter gets to run free, like cosmic inflation
     // outrunning the (later-established) speed limit, before it kicks in for the rest of the run.
     for (const n of nodes) {
-      if (n.fixed) continue;
+      if (n.fixed || isHistoryHidden(n)) continue;
       const speed = Math.hypot(n.vx, n.vy);
       if (speedCapped && speed > MAX_SPEED) {
         n.vx = (n.vx / speed) * MAX_SPEED;
@@ -555,7 +558,7 @@
   function updateGravityWells() {
     // Re-pick the "gravity sources" (the highest-mass particles) every 30 frames instead of every frame
     if (gravityWellsTick % 30 === 0) {
-      gravityWells = [...nodes].sort((a, b) => massFactor(b) - massFactor(a)).slice(0, 40);
+      gravityWells = nodes.filter((n) => !isHistoryHidden(n)).sort((a, b) => massFactor(b) - massFactor(a)).slice(0, 40);
     }
     gravityWellsTick++;
   }
@@ -1133,6 +1136,13 @@
     return Math.min(1, lines / Math.max(20, n.size / 30));
   }
 
+  // Not just hidden from rendering — excluded from grid/step/springs/ambient sound too, so
+  // scrubbing back to an early, sparse commit actually cuts the O(n) physics and audio work down
+  // to whatever existed then, instead of still simulating every current file in the background.
+  function isHistoryHidden(n) {
+    return !!(historyExistingFiles && !historyExistingFiles.has(n.id));
+  }
+
   // Ambient sound field: every particle can sustain a tone, but only the batch nearest the
   // screen center gets picked (bounded voices), throttled to recompute every ~200ms instead
   // of sorting all particles every frame
@@ -1143,6 +1153,7 @@
     const maxListenR = Math.max(cssW, cssH) * 0.55;
     const near = [];
     for (const n of nodes) {
+      if (isHistoryHidden(n)) continue;
       const [sx, sy] = worldToScreen(n.x, n.y);
       const dx = sx - cssW / 2;
       const dy = sy - cssH / 2;
