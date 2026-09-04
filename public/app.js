@@ -765,11 +765,14 @@
     }
     ctx.shadowBlur = 0;
 
-    // Labels: show filenames once zoomed in far enough
-    if (view.scale > 1.6) {
+    // Labels: only for the hovered/selected particle, not every particle once zoomed in — draws
+    // at most two text calls a frame regardless of node count, and reads as a direct response to
+    // pointing at or clicking a particle rather than name clutter filling the screen.
+    if (hoveredId || selectedId) {
       ctx.font = '11px sans-serif';
       ctx.fillStyle = 'rgba(230,230,240,0.85)';
       for (const n of nodes) {
+        if (n.id !== hoveredId && n.id !== selectedId) continue;
         if (nodePresence(n, t * 1000) <= 0) continue;
         if (isHistoryHidden(n)) continue;
         const [sx, sy] = worldToScreen(n.x, n.y);
