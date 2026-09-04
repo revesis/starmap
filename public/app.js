@@ -369,6 +369,7 @@
     const SPRING_LEN = 70;
     const CENTER_PULL = 0.004;
     const DAMPING = 0.82;
+    const MAX_SPEED = 4; // hard velocity ceiling — scenario A's "shared-units speed cap", not a uniform time-scale
 
     // Repulsion + gravity: only compare within the same cell and neighboring cells
     for (const n of nodes) {
@@ -465,8 +466,18 @@
       if (!t.fixed) { t.vx -= fx / massFactor(t); t.vy -= fy / massFactor(t); }
     }
 
+    // Speed cap ("scenario A"): nothing in the shared world-coordinate system can move faster
+    // than MAX_SPEED, no matter how much force/mass/collision math above pushed it — the closer a
+    // particle's uncapped speed gets to this ceiling, the harder this clamps it back, so busy,
+    // heavily-forced moments (dense clusters, lots of collisions) are exactly where this is most
+    // visible, same as relativistic speed limits biting hardest near c.
     for (const n of nodes) {
       if (n.fixed) continue;
+      const speed = Math.hypot(n.vx, n.vy);
+      if (speed > MAX_SPEED) {
+        n.vx = (n.vx / speed) * MAX_SPEED;
+        n.vy = (n.vy / speed) * MAX_SPEED;
+      }
       n.x += n.vx;
       n.y += n.vy;
     }
