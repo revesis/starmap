@@ -413,6 +413,43 @@
       n.vy = (n.vy + fy / mf) * DAMPING;
     }
 
+    // Collisions: when two particles actually overlap, exchange velocity via the impulse-
+    // momentum theorem (F*dt = m*dv) instead of just letting the continuous repulsion above push
+    // them apart. Unlike repulsion/gravity (each node independently computes its own force),
+    // this modifies both sides of a pair at once, so each unordered pair is resolved exactly once
+    // (the `n.id >= other.id` check) rather than once per node. A .fixed particle (user-dragged)
+    // is treated as infinite mass — it can still be collided with, but never gets knocked around.
+    const RESTITUTION = 0.6; // 1 = perfectly elastic bounce, 0 = particles just stop dead-on
+    for (const n of nodes) {
+      const gx = Math.floor(n.x / cellSize);
+      const gy = Math.floor(n.y / cellSize);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const arr = grid.get((gx + dx) + ',' + (gy + dy));
+          if (!arr) continue;
+          for (const other of arr) {
+            if (other === n || n.id >= other.id || (n.fixed && other.fixed)) continue;
+            const ddx = other.x - n.x;
+            const ddy = other.y - n.y;
+            const minDist = n.radius + other.radius;
+            const distSq = ddx * ddx + ddy * ddy;
+            if (distSq >= minDist * minDist || distSq < 1e-6) continue;
+            const dist = Math.sqrt(distSq);
+            const nx = ddx / dist, ny = ddy / dist; // collision normal, n -> other
+            const vn = (other.vx - n.vx) * nx + (other.vy - n.vy) * ny; // closing speed along normal
+            if (vn >= 0) continue; // already moving apart
+            const invM1 = n.fixed ? 0 : 1 / massFactor(n);
+            const invM2 = other.fixed ? 0 : 1 / massFactor(other);
+            const j = (-(1 + RESTITUTION) * vn) / (invM1 + invM2);
+            n.vx -= j * invM1 * nx;
+            n.vy -= j * invM1 * ny;
+            other.vx += j * invM2 * nx;
+            other.vy += j * invM2 * ny;
+          }
+        }
+      }
+    }
+
     // Springs: pull dependency-connected nodes closer together
     for (const e of edges) {
       const s = nodeById.get(e.source);
