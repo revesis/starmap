@@ -131,6 +131,40 @@
     ];
   }
 
+  // Gravity mass, reframed after the "where does mass actually come from" tangent: a proton's
+  // mass comes mostly from the internal motion/binding energy of its quarks, not from its own
+  // size or how many other particles orbit it. Kept as two separate components rather than one
+  // formula, computed on demand from the node's own stored fields (radius/outDegree/changeRatio)
+  // rather than cached — cheap to recompute, and avoids yet another derived field that can drift
+  // out of sync with its inputs (see the intensity staleness gap noted elsewhere). Both are
+  // exposed separately in case something other than total mass wants just one of them later.
+  function computeStructuralMass(n) {
+    // "binding energy": how entangled this file's own internals are with other code (outDegree —
+    // how many things it imports), plus a small radius baseline so an isolated file isn't massless
+    return n.radius + (n.outDegree || 0) * 6;
+  }
+  function computeKineticMass(n) {
+    // "kinetic energy": how much of this file's own content is currently being rewritten
+    return (n.changeRatio || 0) * 40;
+  }
+  function computeMass(n) {
+    return computeStructuralMass(n) + computeKineticMass(n);
+  }
+
+  // Mass only matters relative to the rest of the graph — an absolute value would let a handful of
+  // outlier files (huge outDegree, mid-rewrite) dominate the physics via a massive inertia swing.
+  // massFactor() is what step() actually divides force by; clamped so no particle becomes either
+  // uncontrollably twitchy (near-zero mass) or completely inert (way-above-average mass).
+  let avgMass = 1;
+  function recomputeAvgMass() {
+    return nodes.length ? nodes.reduce((s, n) => s + n.mass, 0) / nodes.length : 1;
+  }
+  const MASS_FACTOR_MIN = 0.5;
+  const MASS_FACTOR_MAX = 3;
+  function massFactor(n) {
+    return Math.min(MASS_FACTOR_MAX, Math.max(MASS_FACTOR_MIN, n.mass / (avgMass || 1)));
+  }
+
   // 0..1 render scale for a particle's spawn-in/despawn-out animation (see spawnIncomingNodes and
   // despawnNode); 0 means "don't draw it at all". A plain existing particle always returns 1.
   function nodePresence(n, tMs) {
@@ -170,6 +204,7 @@
         const n = nodeById.get(updated.id);
         if (!n) { incoming.push(updated); continue; }
         n.changeRatio = updated.changeRatio;
+        n.mass = computeMass(n);
         if (updated.touched !== n.touched) {
           n.touched = updated.touched;
           n.flashUntil = performance.now() + TOUCH_FLASH_MS;
@@ -181,6 +216,7 @@
         if (!n.removeStartAt && !freshIds.has(n.id)) despawnNode(n);
       }
       avgEntropy = recomputeAvgEntropy();
+      avgMass = recomputeAvgMass();
       if (audioEnabled) window.CosmosAudio && window.CosmosAudio.updateEntropy(avgEntropy);
     } catch {
       // a failed refresh just means we try again next interval
@@ -210,7 +246,7 @@
         fixed: false,
         phase: Math.random() * Math.PI * 2,
         twinkleSpeed: 0.6 + Math.random() * 1.2 + (raw.touched ? 2 : 0),
-        mass: raw.radius + raw.degree * 6,
+        mass: computeMass(raw),
         flashUntil: 0,
         spawnAt,
         spawnDoneAt: spawnAt + NEW_FILE_SPAWN_MS,
@@ -229,7 +265,10 @@
       edgeKeys.add(key);
       edges.push(e);
       s.degree += 1;
+      s.outDegree += 1;
+      s.mass = computeMass(s);
       t.degree += 1;
+      t.inDegree += 1;
     }
 
     rootLabel.textContent = `${nodes.length} particles · ${edges.length} strings${gitRepo ? ' · git connected' : ''}`;
@@ -256,8 +295,8 @@
       edgeKeys.delete(e.source + '=>' + e.target);
       const s = nodeById.get(e.source);
       const t = nodeById.get(e.target);
-      if (s) s.degree -= 1;
-      if (t) t.degree -= 1;
+      if (s) { s.degree -= 1; s.outDegree -= 1; s.mass = computeMass(s); }
+      if (t) { t.degree -= 1; t.inDegree -= 1; }
       edges.splice(i, 1);
     }
     if (selectedId === id) {
@@ -302,8 +341,7 @@
       n.phase = Math.random() * Math.PI * 2;
       // files touched by the latest commit twinkle a bit faster/more "restless"
       n.twinkleSpeed = 0.6 + Math.random() * 1.2 + (n.touched ? 2 : 0);
-      // gravity mass: the bigger the file and the more it's depended on, the more it warps the spacetime grid around it
-      n.mass = n.radius + n.degree * 6;
+      n.mass = computeMass(n);
       n.flashUntil = 0;
     }
   }
@@ -358,8 +396,11 @@
       // pull back toward the center of its own nebula
       fx += (n.cx - n.x) * CENTER_PULL;
       fy += (n.cy - n.y) * CENTER_PULL;
-      n.vx = (n.vx + fx) * DAMPING;
-      n.vy = (n.vy + fy) * DAMPING;
+      // F=ma: the same net force nudges a heavier (more internally entangled/active) particle
+      // less than a lighter one
+      const mf = massFactor(n);
+      n.vx = (n.vx + fx / mf) * DAMPING;
+      n.vy = (n.vy + fy / mf) * DAMPING;
     }
 
     // Springs: pull dependency-connected nodes closer together
@@ -373,8 +414,8 @@
       const diff = (dist - SPRING_LEN) * SPRING;
       const fx = (dx / dist) * diff;
       const fy = (dy / dist) * diff;
-      if (!s.fixed) { s.vx += fx; s.vy += fy; }
-      if (!t.fixed) { t.vx -= fx; t.vy -= fy; }
+      if (!s.fixed) { s.vx += fx / massFactor(s); s.vy += fy / massFactor(s); }
+      if (!t.fixed) { t.vx -= fx / massFactor(t); t.vy -= fy / massFactor(t); }
     }
 
     for (const n of nodes) {
@@ -421,12 +462,16 @@
   }
 
   // ---- Gravity wells: a background spacetime grid that warps toward high-mass/dense areas ----
+  // Uses massFactor() — the same relative-to-average, clamped mass measure the physics step uses
+  // for inertia — instead of raw n.mass, so "mass" means one consistent thing everywhere rather
+  // than an unbounded value here and a normalized one there.
+  const GRAVITY_PULL_SCALE = 42000; // recalibrated for massFactor's ~0.5-3 range (was tuned for raw mass)
   let gravityWells = [];
   let gravityWellsTick = 0;
   function updateGravityWells() {
     // Re-pick the "gravity sources" (the highest-mass particles) every 30 frames instead of every frame
     if (gravityWellsTick % 30 === 0) {
-      gravityWells = [...nodes].sort((a, b) => b.mass - a.mass).slice(0, 40);
+      gravityWells = [...nodes].sort((a, b) => massFactor(b) - massFactor(a)).slice(0, 40);
     }
     gravityWellsTick++;
   }
@@ -440,7 +485,7 @@
       const ddx = w.x - px;
       const ddy = w.y - py;
       const distSq = ddx * ddx + ddy * ddy + 500;
-      const pull = Math.min((w.mass * 1400) / distSq, 60);
+      const pull = Math.min((massFactor(w) * GRAVITY_PULL_SCALE) / distSq, 60);
       const dist = Math.sqrt(distSq);
       dx += (ddx / dist) * pull;
       dy += (ddy / dist) * pull;
@@ -1124,6 +1169,7 @@
     avgEntropy = recomputeAvgEntropy();
 
     initLayout();
+    avgMass = recomputeAvgMass();
     loop();
     setInterval(refreshTouchedFiles, REFRESH_INTERVAL_MS);
   }

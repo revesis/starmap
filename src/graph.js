@@ -143,6 +143,8 @@ function build(rootDir, files, gitRepo) {
     radius: Math.round(sizeToRadius(f.size, minSize, maxSize) * 10) / 10,
     color: COLOR_TABLE[f.ext] || DEFAULT_COLOR,
     degree: 0,
+    inDegree: 0, // how many other files import this one
+    outDegree: 0, // how many other files this one imports
     touched: lastCommitStats.has(f.rel),
     changeRatio: 0, // filled in below, only for touched files
   }));
@@ -193,8 +195,8 @@ function build(rootDir, files, gitRepo) {
   for (const e of edges) {
     const s = nodeById.get(e.source);
     const t = nodeById.get(e.target);
-    if (s) s.degree += 1;
-    if (t) t.degree += 1;
+    if (s) { s.degree += 1; s.outDegree += 1; }
+    if (t) { t.degree += 1; t.inDegree += 1; }
   }
 
   const maxDegree = Math.max(1, ...nodes.map((n) => n.degree));
