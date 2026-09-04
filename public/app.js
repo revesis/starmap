@@ -318,8 +318,14 @@
     return clusterCenters.get(dir);
   }
 
+  // Marks when the simulation actually started (set once, in initLayout — not re-triggered by
+  // later file spawns/despawns, since this is a one-time "big bang" moment for the whole layout,
+  // not a per-particle thing). Used by step()'s MAX_SPEED cap below.
+  let simStartTime = 0;
+
   // ---- Layout: cluster into per-directory "nebulae", force-directed within each cluster ----
   function initLayout() {
+    simStartTime = performance.now();
     const dirs = [...new Set(nodes.map((n) => n.dir))];
     clusterCenters = new Map();
     clusterR = 260 * Math.max(1, Math.sqrt(dirs.length));
@@ -370,6 +376,8 @@
     const CENTER_PULL = 0.004;
     const DAMPING = 0.82;
     const MAX_SPEED = 4; // hard velocity ceiling — scenario A's "shared-units speed cap", not a uniform time-scale
+    const BIG_BANG_MS = 2500; // no speed limit for this long after initLayout — the cap only "switches on" afterward
+    const speedCapped = performance.now() - simStartTime > BIG_BANG_MS;
 
     // Repulsion + gravity: only compare within the same cell and neighboring cells
     for (const n of nodes) {
@@ -470,11 +478,14 @@
     // than MAX_SPEED, no matter how much force/mass/collision math above pushed it — the closer a
     // particle's uncapped speed gets to this ceiling, the harder this clamps it back, so busy,
     // heavily-forced moments (dense clusters, lots of collisions) are exactly where this is most
-    // visible, same as relativistic speed limits biting hardest near c.
+    // visible, same as relativistic speed limits biting hardest near c. For the first
+    // BIG_BANG_MS after the layout starts, this is switched off entirely — the initial explosive
+    // spread-out from everyone's starting jitter gets to run free, like cosmic inflation
+    // outrunning the (later-established) speed limit, before it kicks in for the rest of the run.
     for (const n of nodes) {
       if (n.fixed) continue;
       const speed = Math.hypot(n.vx, n.vy);
-      if (speed > MAX_SPEED) {
+      if (speedCapped && speed > MAX_SPEED) {
         n.vx = (n.vx / speed) * MAX_SPEED;
         n.vy = (n.vy / speed) * MAX_SPEED;
       }
