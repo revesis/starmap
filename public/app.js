@@ -771,7 +771,7 @@
         const [sx, sy] = worldToScreen(n.x, n.y);
         const r = n.radius * view.scale;
         if (sx < -50 || sy < -50 || sx > canvas.width / devicePixelRatio + 50) continue;
-        ctx.fillText(n.label, sx + r + 3, sy + 3);
+        ctx.fillText(n.id, sx + r + 3, sy + 3);
       }
     }
 
