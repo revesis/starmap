@@ -11,6 +11,7 @@ const resolvers = [
   require('./dart'),
   require('./java'),
   require('./go'),
+  require('./rust'),
 ];
 
 const byExt = new Map();
