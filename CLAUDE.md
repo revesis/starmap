@@ -38,14 +38,15 @@ starmap [dir] [--port 4550] [--https]
 - `src/graph.js` — the core model builder (`build(rootDir, files, gitRepo)`):
   - `COLOR_TABLE` maps extension → color; `sizeToRadius` linearly maps file size → particle radius (clamped).
   - Dependency resolution is regex-based, one module per language under `src/resolvers/`
-    (`javascript.js`, `python.js`, `dart.js`, `java.js`, dispatched by extension via
+    (`javascript.js`, `python.js`, `dart.js`, `java.js`, `go.js`, dispatched by extension via
     `src/resolvers/index.js`'s `byExt` map; shared path-join/extension-search/index-lookup logic
     lives in `resolve-utils.js`). Most resolve **relative paths** only — no `node_modules`/`package:`
-    resolution, no real call graph; `java.js` is the one exception, matching a fully-qualified
-    import (`com.example.Foo`) as a path *suffix* against every file in the repo instead, since
-    Java imports aren't relative to the importing file at all. This is a known/accepted scope
-    limit (see README "Current scope"). Adding a language means adding one file to
-    `src/resolvers/`, not extending a shared regex list.
+    resolution, no real call graph; `java.js`/`go.js` are the exceptions, matching a fully-qualified
+    import path as a *suffix* against the repo's files/directories instead (`go.js` also resolves a
+    whole package/directory down to one representative file, since a Go import names a package —
+    several files — not one file), since neither language's imports are relative to the importing
+    file at all. This is a known/accepted scope limit (see README "Current scope"). Adding a
+    language means adding one file to `src/resolvers/`, not extending a shared regex list.
   - `computeTouchedByLastCommit` shells out to `git log -n 1 --name-only` to get a per-file boolean
     (`n.touched`, not a graded score) used for jitter and as an ambient sound intensity input.
 - `src/server.js` — `createRequestHandler(rootDir)` is shared by both HTTP and HTTPS servers. Routes:
