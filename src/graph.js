@@ -34,6 +34,7 @@ const COLOR_TABLE = {
   '.sh': '#89e051',
   '.sql': '#e38c00',
   '.vue': '#41b883',
+  '.dart': '#00b4ab',
 };
 const DEFAULT_COLOR = '#7a7a7a';
 
@@ -48,6 +49,11 @@ const IMPORT_PATTERNS = [
   /\bimport\(\s*['"](\.[^'"]+)['"]\s*\)/g, // dynamic import('./y')
   /^\s*from\s+(\.+[\w.]*)\s+import\b/gm, // python: from .y import z
   /^\s*import\s+(\.+[\w.]+)/gm, // python: import .y (rare but handled)
+  // dart: import/export/part 'foo.dart' — unlike JS, a same-package relative reference is
+  // usually written *without* a leading './', so this can't require a dot prefix like the JS
+  // pattern above; instead it excludes the two non-relative schemes (package:, dart:) and
+  // requires the literal .dart extension (which Dart imports, unlike JS, always spell out)
+  /\b(?:import|export|part)\s+['"]((?!package:)(?!dart:)[^'"]+\.dart)['"]/g,
 ];
 
 function extractRelativeImports(content) {
@@ -225,7 +231,7 @@ function build(rootDir, files, gitRepo) {
 
   const edgeSet = new Set();
   const edges = [];
-  const codeExts = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py']);
+  const codeExts = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.dart']);
 
   for (const f of files) {
     if (!codeExts.has(f.ext)) continue;
