@@ -10,6 +10,7 @@ const resolvers = [
   require('./python'),
   require('./dart'),
   require('./java'),
+  require('./go'),
 ];
 
 const byExt = new Map();
