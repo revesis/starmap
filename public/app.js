@@ -529,6 +529,9 @@
   let historyLoading = false;
   let historySelected = -1; // index into historyWindow, or -1 = live (not scrubbing history)
   let historyTouched = null; // Map<fileId, lines> for the selected commit, or null when live
+  let historyExistingFiles = null; // Set<fileId> that existed as of the selected commit, or null when live
+  let historyExistFetchTimer = null;
+  let historyExistFetchSha = null; // guards against a slower, superseded fetch overwriting a newer one
   let draggingTime = false;
 
   // Pluck the string when a photon reaches its target particle along a dependency edge;
@@ -638,6 +641,7 @@
       const s = nodeById.get(e.source);
       const tt = nodeById.get(e.target);
       if (!s || !tt) continue;
+      if (historyExistingFiles && (!historyExistingFiles.has(s.id) || !historyExistingFiles.has(tt.id))) continue;
       const [sx, sy] = worldToScreen(s.x, s.y);
       const [tx, ty] = worldToScreen(tt.x, tt.y);
       ctx.strokeStyle = dense ? 'rgba(120,140,255,0.06)' : 'rgba(120,140,255,0.12)';
@@ -670,6 +674,7 @@
       // toward/away from zero radius rather than popping to full size or vanishing instantly.
       const presence = nodePresence(n, t * 1000);
       if (presence <= 0) continue;
+      if (historyExistingFiles && !historyExistingFiles.has(n.id)) continue; // didn't exist yet as of the selected commit
 
       let [sx, sy] = worldToScreen(n.x, n.y);
       // Position fuzz for touched files: resampled fresh every frame with no memory (unlike a
@@ -1061,18 +1066,42 @@
     }
   }
 
-  // Selecting a commit only overrides how touched/changeRatio are *displayed* (see displayTouched
-  // / displayChangeRatio in draw()) — it never rewrites n.touched/n.changeRatio, which stay the
-  // live values refreshTouchedFiles maintains, so returning to "now" needs no re-fetch.
+  // Fetches which files existed as of `sha` (debounced — a fast drag can flip through many
+  // commits per second, and each check is a full `git ls-tree -r`) so particles for files not
+  // yet created at that point in history can be hidden instead of misleadingly still showing.
+  function scheduleHistoryExistFetch(sha) {
+    if (historyExistFetchTimer) clearTimeout(historyExistFetchTimer);
+    historyExistFetchTimer = setTimeout(async () => {
+      historyExistFetchSha = sha;
+      try {
+        const res = await fetch('/api/tree?sha=' + encodeURIComponent(sha));
+        const data = await res.json();
+        if (historyExistFetchSha !== sha) return; // superseded by a newer selection meanwhile
+        historyExistingFiles = new Set(data.files);
+      } catch {
+        // leave whatever set we already had
+      }
+    }, 120);
+  }
+
+  // Selecting a commit only overrides how touched/changeRatio/existence are *displayed* (see
+  // displayTouched / displayChangeRatio in draw()) — it never rewrites n.touched/n.changeRatio,
+  // which stay the live values refreshTouchedFiles maintains, so returning to "now" needs no
+  // re-fetch there (existence resets to "all visible" instantly too).
   function selectHistoryIndex(i) {
     if (i <= 0) {
       historySelected = -1;
       historyTouched = null;
+      historyExistingFiles = null;
+      historyExistFetchSha = null;
+      if (historyExistFetchTimer) { clearTimeout(historyExistFetchTimer); historyExistFetchTimer = null; }
       return;
     }
+    if (i === historySelected) return;
     historySelected = i;
     const commit = historyWindow[i];
     historyTouched = new Map(commit.files.map((f) => [f.rel, f.lines]));
+    scheduleHistoryExistFetch(commit.sha);
   }
 
   function handleTimeDrag(sx, sy) {

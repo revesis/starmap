@@ -166,6 +166,23 @@ function commitHistoryWindow(rootDir, beforeIso, limit) {
   return { commits, hasMore };
 }
 
+// Which files existed (anywhere in the tree, not just the resolvable/scanned subset) as of a
+// given commit — used by the time dial to hide particles for files that hadn't been created yet
+// at the point in history being viewed. Only ever called for one specific commit on demand (when
+// the dial settles on it), never for a whole window, since `ls-tree -r` walks the full tree.
+function listFilesAtCommit(rootDir, sha) {
+  try {
+    const out = execFileSync(
+      'git',
+      ['-C', rootDir, 'ls-tree', '-r', '--name-only', sha],
+      { maxBuffer: 1024 * 1024 * 64 }
+    ).toString('utf8');
+    return out.split('\n').map((s) => s.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 function build(rootDir, files, gitRepo) {
   const fileSet = new Set(files.map((f) => f.rel));
   const sizes = files.map((f) => f.size);
@@ -246,4 +263,4 @@ function build(rootDir, files, gitRepo) {
   return { nodes, edges, maxDegree };
 }
 
-module.exports = { build, commitHistoryWindow, COLOR_TABLE, DEFAULT_COLOR };
+module.exports = { build, commitHistoryWindow, listFilesAtCommit, COLOR_TABLE, DEFAULT_COLOR };

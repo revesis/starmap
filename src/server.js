@@ -7,7 +7,7 @@ const { execFile } = require('child_process');
 const { URL } = require('url');
 
 const { scan } = require('./scan');
-const { build, commitHistoryWindow } = require('./graph');
+const { build, commitHistoryWindow, listFilesAtCommit } = require('./graph');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = {
@@ -81,6 +81,16 @@ function createRequestHandler(rootDir) {
       const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 60;
       const { commits, hasMore } = commitHistoryWindow(rootDir, before, limit);
       sendJson(res, 200, { commits, hasMore });
+      return;
+    }
+
+    if (url.pathname === '/api/tree') {
+      const sha = url.searchParams.get('sha');
+      if (!sha || !/^[0-9a-f]{7,40}$/i.test(sha)) {
+        sendJson(res, 400, { error: 'invalid sha' });
+        return;
+      }
+      sendJson(res, 200, { files: listFilesAtCommit(rootDir, sha) });
       return;
     }
 
