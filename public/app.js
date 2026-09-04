@@ -358,12 +358,6 @@
       // pull back toward the center of its own nebula
       fx += (n.cx - n.x) * CENTER_PULL;
       fy += (n.cy - n.y) * CENTER_PULL;
-      // a file touched by the latest commit gets a visible random "thermal motion"
-      if (n.touched) {
-        const heat = 2.2;
-        fx += (Math.random() - 0.5) * heat;
-        fy += (Math.random() - 0.5) * heat;
-      }
       n.vx = (n.vx + fx) * DAMPING;
       n.vy = (n.vy + fy) * DAMPING;
     }
@@ -499,6 +493,7 @@
   }
 
   const WAVE_MAX_RINGS = 9; // concentric rings shown for a near-total rewrite of a file
+  const POSITION_UNCERTAINTY_PX = 5; // max render-time positional fuzz for a touched particle
 
   function draw() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -550,7 +545,16 @@
       const presence = nodePresence(n, t * 1000);
       if (presence <= 0) continue;
 
-      const [sx, sy] = worldToScreen(n.x, n.y);
+      let [sx, sy] = worldToScreen(n.x, n.y);
+      // Position fuzz for touched files: resampled fresh every frame with no memory (unlike a
+      // Brownian/thermal jitter, which would nudge n.vx/n.vy and carry momentum frame to frame),
+      // and applied only at render time — the particle's actual n.x/n.y stay exact. Meant to read
+      // as intrinsic positional uncertainty (a Heisenberg-style fuzzy cloud) rather than being
+      // visibly "pushed around" by anything.
+      if (n.touched) {
+        sx += (Math.random() - 0.5) * POSITION_UNCERTAINTY_PX;
+        sy += (Math.random() - 0.5) * POSITION_UNCERTAINTY_PX;
+      }
       const r = Math.max(n.radius * view.scale, 1.4) * presence;
       if (sx < -50 || sy < -50 || sx > cssW + 50 || sy > cssH + 50) continue;
 
