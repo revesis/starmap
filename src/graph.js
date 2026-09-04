@@ -97,26 +97,34 @@ function isProbablyBinary(content) {
   return content.indexOf(String.fromCharCode(0)) !== -1;
 }
 
-// Which files the most recent commit touched — a cheap, "what just happened" signal rather than
-// a long-term activity score. Deliberately only looks at HEAD's commit (not the working tree, so
-// uncommitted edits don't count) and not further history, so this is a single-commit `git log`
-// call, cheap enough to run on every rebuild with no caching needed.
-function computeTouchedByLastCommit(rootDir) {
+// Lines added+deleted per file in the most recent commit — a cheap, "what just happened" signal
+// rather than a long-term activity score. Deliberately only looks at HEAD's commit (not the
+// working tree, so uncommitted edits don't count) and not further history, so this is a
+// single-commit `git show --numstat` call, cheap enough to run on every rebuild with no caching
+// needed. A file present as a key here (even at 0) is "touched"; everything else wasn't.
+function computeLastCommitStats(rootDir) {
+  const stats = new Map();
   try {
     const out = execFileSync(
       'git',
-      ['-C', rootDir, 'log', '--pretty=format:', '--name-only', '-n', '1'],
+      ['-C', rootDir, 'show', '--numstat', '--pretty=format:', '-1'],
       { maxBuffer: 1024 * 1024 * 64 }
     ).toString('utf8');
-    const touched = new Set();
     for (const line of out.split('\n')) {
-      const rel = line.trim();
-      if (rel) touched.add(rel);
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const [addedStr, deletedStr, rel] = trimmed.split('\t');
+      if (!rel) continue;
+      // "-" means numstat couldn't diff it (binary file) — still counts as touched, just with no
+      // meaningful line count
+      const added = addedStr === '-' ? 0 : parseInt(addedStr, 10) || 0;
+      const deleted = deletedStr === '-' ? 0 : parseInt(deletedStr, 10) || 0;
+      stats.set(rel, added + deleted);
     }
-    return touched;
   } catch {
-    return new Set();
+    // no commits yet, or not a git repo — leave stats empty
   }
+  return stats;
 }
 
 function build(rootDir, files, gitRepo) {
@@ -124,7 +132,7 @@ function build(rootDir, files, gitRepo) {
   const sizes = files.map((f) => f.size);
   const minSize = Math.min(...sizes, 0);
   const maxSize = Math.max(...sizes, 1);
-  const touchedByLastCommit = gitRepo ? computeTouchedByLastCommit(rootDir) : new Set();
+  const lastCommitStats = gitRepo ? computeLastCommitStats(rootDir) : new Map();
 
   const nodes = files.map((f) => ({
     id: f.rel,
@@ -135,9 +143,27 @@ function build(rootDir, files, gitRepo) {
     radius: Math.round(sizeToRadius(f.size, minSize, maxSize) * 10) / 10,
     color: COLOR_TABLE[f.ext] || DEFAULT_COLOR,
     degree: 0,
-    touched: touchedByLastCommit.has(f.rel),
+    touched: lastCommitStats.has(f.rel),
+    changeRatio: 0, // filled in below, only for touched files
   }));
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
+
+  // changeRatio = what fraction of THIS file's own lines the latest commit rewrote — reading full
+  // content only for the (usually small) set of touched files, regardless of repo size, so this
+  // stays cheap even on a large codebase.
+  for (const [rel, changedLines] of lastCommitStats) {
+    const n = nodeById.get(rel);
+    const f = n && files.find((file) => file.rel === rel);
+    if (!f) continue; // renamed/deleted since that commit, or a numstat line we couldn't map
+    try {
+      const content = fs.readFileSync(f.abs, 'utf8');
+      if (isProbablyBinary(content)) continue;
+      const totalLines = content.split('\n').length || 1;
+      n.changeRatio = Math.round(Math.min(1, changedLines / totalLines) * 100) / 100;
+    } catch {
+      // unreadable file — leave changeRatio at 0
+    }
+  }
 
   const edgeSet = new Set();
   const edges = [];

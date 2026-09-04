@@ -169,6 +169,7 @@
       for (const updated of data.nodes) {
         const n = nodeById.get(updated.id);
         if (!n) { incoming.push(updated); continue; }
+        n.changeRatio = updated.changeRatio;
         if (updated.touched !== n.touched) {
           n.touched = updated.touched;
           n.flashUntil = performance.now() + TOUCH_FLASH_MS;
@@ -558,14 +559,14 @@
 
       if (!dense) {
         // Wave: a persistent "still part of the latest commit" indicator, shown only on touched
-        // particles — strength tracks avgEntropy (what fraction of the repo the latest commit
-        // touched), not this particle's own properties, so a big commit reads as a wave of
-        // strong ripples and a one-file commit barely shows anything.
-        if (n.touched) {
+        // particles — strength tracks n.changeRatio (what fraction of THIS file's own lines the
+        // latest commit rewrote), so a near-total rewrite ripples strongly and a one-line tweak
+        // to a huge file barely shows, regardless of how big the rest of the repo is.
+        if (n.changeRatio > 0) {
           for (let i = 0; i < 2; i++) {
             const wave = ((t * 0.5 + n.phase / (Math.PI * 2) + i * 0.5) % 1);
             const waveR = r + wave * r * 3.2;
-            const waveAlpha = (1 - wave) * 0.3 * avgEntropy;
+            const waveAlpha = (1 - wave) * 0.5 * n.changeRatio;
             if (waveAlpha <= 0.005) continue;
             ctx.beginPath();
             ctx.arc(sx, sy, waveR, 0, Math.PI * 2);
