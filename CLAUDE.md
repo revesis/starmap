@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Starmap: a zero-dependency Node.js CLI that renders the current directory's codebase as an explorable
 particle cosmos in the browser. Files are particles (radius = file size, color = extension), import/require
 edges are connecting "strings," and top-level directories cluster into nebulae. Includes photon-style
-canvas rendering, git-churn-driven "entropy" jitter, gravity-well grid warping, Tone.js-based sonification,
+canvas rendering, jitter for files touched by the latest commit, gravity-well grid warping, Tone.js-based sonification,
 and camera-based two-hand gesture control (MediaPipe Hands) as an alternative to mouse/touch.
 
 There are no external runtime dependencies (backend is pure Node built-ins); frontend libraries (Tone.js,
@@ -40,11 +40,12 @@ starmap [dir] [--port 4550] [--https]
   - Dependency resolution is regex-based (`IMPORT_PATTERNS`) and only handles **relative-path**
     import/require in JS/JSX/TS/TSX/MJS/CJS/Python — no `node_modules`/package resolution, no real
     call graph. This is a known/accepted scope limit (see README "Current scope").
-  - `computeChurn` shells out to `git log --name-only` to derive a per-file entropy/intensity score used
-    for jitter and ambient sound intensity.
+  - `computeTouchedByLastCommit` shells out to `git log -n 1 --name-only` to get a per-file boolean
+    (`n.touched`, not a graded score) used for jitter and as an ambient sound intensity input.
 - `src/server.js` — `createRequestHandler(rootDir)` is shared by both HTTP and HTTPS servers. Routes:
-  `/api/graph` (the built graph), `/api/refresh` (POST, rescans), `/api/diff` (runs `git diff`/`git log`/
-  `git status` via `execFile` for a given file), `/api/file` (content preview), plus static serving from
+  `/api/graph` (the built graph), `/api/refresh` (POST, rescans — polled every 20s by the frontend to
+  spawn/despawn particles for files that appeared/disappeared and to catch `touched` flipping), `/api/diff`
+  (runs `git diff`/`git log`/`git status` via `execFile` for a given file), `/api/file` (content preview), plus static serving from
   `public/`. `safeResolveRel` guards against path traversal on all file-path-taking routes.
 - `src/certs.js` — self-signed cert generation/caching (shells out to `openssl`), and LAN IP enumeration
   for the "open on your phone" print at startup.

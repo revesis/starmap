@@ -97,35 +97,25 @@ function isProbablyBinary(content) {
   return content.indexOf(String.fromCharCode(0)) !== -1;
 }
 
-// Entropy: approximate "how chaotic/often-changed is this file" using its commit churn count.
-// This shells out to `git log` over the last 3000 commits, which is by far the most expensive
-// part of a rebuild — cached for a few seconds so callers that rebuild often (e.g. the frontend's
-// periodic /api/refresh poll) don't re-walk the whole commit history on every call. Commit
-// history changes far less often than the file list does, so this is safe to lag slightly behind
-// a plain file rescan.
-let churnCache = null; // { rootDir, map, computedAt }
-const CHURN_CACHE_MS = 20000;
-
-function computeChurn(rootDir) {
-  if (churnCache && churnCache.rootDir === rootDir && Date.now() - churnCache.computedAt < CHURN_CACHE_MS) {
-    return churnCache.map;
-  }
+// Which files the most recent commit touched — a cheap, "what just happened" signal rather than
+// a long-term activity score. Deliberately only looks at HEAD's commit (not the working tree, so
+// uncommitted edits don't count) and not further history, so this is a single-commit `git log`
+// call, cheap enough to run on every rebuild with no caching needed.
+function computeTouchedByLastCommit(rootDir) {
   try {
     const out = execFileSync(
       'git',
-      ['-C', rootDir, 'log', '--pretty=format:', '--name-only', '-n', '3000'],
+      ['-C', rootDir, 'log', '--pretty=format:', '--name-only', '-n', '1'],
       { maxBuffer: 1024 * 1024 * 64 }
     ).toString('utf8');
-    const counts = new Map();
+    const touched = new Set();
     for (const line of out.split('\n')) {
       const rel = line.trim();
-      if (!rel) continue;
-      counts.set(rel, (counts.get(rel) || 0) + 1);
+      if (rel) touched.add(rel);
     }
-    churnCache = { rootDir, map: counts, computedAt: Date.now() };
-    return counts;
+    return touched;
   } catch {
-    return new Map();
+    return new Set();
   }
 }
 
@@ -134,7 +124,7 @@ function build(rootDir, files, gitRepo) {
   const sizes = files.map((f) => f.size);
   const minSize = Math.min(...sizes, 0);
   const maxSize = Math.max(...sizes, 1);
-  const churnMap = gitRepo ? computeChurn(rootDir) : new Map();
+  const touchedByLastCommit = gitRepo ? computeTouchedByLastCommit(rootDir) : new Set();
 
   const nodes = files.map((f) => ({
     id: f.rel,
@@ -145,7 +135,7 @@ function build(rootDir, files, gitRepo) {
     radius: Math.round(sizeToRadius(f.size, minSize, maxSize) * 10) / 10,
     color: COLOR_TABLE[f.ext] || DEFAULT_COLOR,
     degree: 0,
-    churn: churnMap.get(f.rel) || 0,
+    touched: touchedByLastCommit.has(f.rel),
   }));
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
@@ -182,10 +172,8 @@ function build(rootDir, files, gitRepo) {
   }
 
   const maxDegree = Math.max(1, ...nodes.map((n) => n.degree));
-  const maxChurn = Math.max(1, ...nodes.map((n) => n.churn));
   for (const n of nodes) {
     n.intensity = Math.round((n.degree / maxDegree) * 100) / 100; // 0..1, color depth (also part of gravity mass)
-    n.entropy = Math.round((n.churn / maxChurn) * 100) / 100; // 0..1, the more often it changes the "hotter"/more chaotic
   }
 
   return { nodes, edges, maxDegree };

@@ -125,10 +125,6 @@
     ];
   }
 
-  function energyLevelFor(entropy) {
-    return Math.min(4, Math.floor((entropy || 0) * 5));
-  }
-
   // 0..1 render scale for a particle's spawn-in/despawn-out animation (see spawnIncomingNodes and
   // despawnNode); 0 means "don't draw it at all". A plain existing particle always returns 1.
   function nodePresence(n, tMs) {
@@ -142,22 +138,22 @@
     return 1;
   }
 
-  // Periodically re-scans (via /api/refresh) and checks each particle's discrete energy level.
-  // Unlike the continuous entropy jitter, a level only changes in whole steps — when it does, we
-  // flag a brief flash instead of interpolating, the visual analogue of a quantum jump rather
-  // than thermal noise. Any file the current node list doesn't know about yet is handed to
-  // spawnIncomingNodes as a batch, since new files tend to arrive in bursts (a save-all, a
-  // generated batch of files, etc.) rather than one at a time.
-  const ENERGY_REFRESH_MS = 20000;
-  const ENERGY_FLASH_MS = 700;
-  const MAX_BATCH_PLUCKS = 6; // cap concurrent arrival/jump sounds so a burst of files isn't a chord
+  // Periodically re-scans (via /api/refresh) and checks whether each particle just entered or
+  // left "touched by the latest commit" (a plain boolean now — see computeTouchedByLastCommit in
+  // src/graph.js — not a graded score, so there's no level to bucket, just a flip to flash on).
+  // Any file the current node list doesn't know about yet is handed to spawnIncomingNodes as a
+  // batch, since new files tend to arrive in bursts (a save-all, a generated batch of files, etc.)
+  // rather than one at a time; anything that dropped out of the fresh scan is despawned the same way.
+  const REFRESH_INTERVAL_MS = 20000;
+  const TOUCH_FLASH_MS = 700;
+  const MAX_BATCH_PLUCKS = 6; // cap concurrent arrival/touch sounds so a burst of files isn't a chord
   let plucksThisBatch = 0;
   function throttledPluck(n) {
     if (!audioEnabled || plucksThisBatch >= MAX_BATCH_PLUCKS) return;
     plucksThisBatch++;
     window.CosmosAudio && window.CosmosAudio.pluck(n);
   }
-  async function refreshEnergyLevels() {
+  async function refreshTouchedFiles() {
     try {
       const res = await fetch('/api/refresh', { method: 'POST' });
       const data = await res.json();
@@ -167,12 +163,9 @@
       for (const updated of data.nodes) {
         const n = nodeById.get(updated.id);
         if (!n) { incoming.push(updated); continue; }
-        n.entropy = updated.entropy;
-        n.churn = updated.churn;
-        const newLevel = energyLevelFor(n.entropy);
-        if (newLevel !== n.energyLevel) {
-          n.energyLevel = newLevel;
-          n.flashUntil = performance.now() + ENERGY_FLASH_MS;
+        if (updated.touched !== n.touched) {
+          n.touched = updated.touched;
+          n.flashUntil = performance.now() + TOUCH_FLASH_MS;
           throttledPluck(n);
         }
       }
@@ -207,9 +200,8 @@
         cy: c.y,
         fixed: false,
         phase: Math.random() * Math.PI * 2,
-        twinkleSpeed: 0.6 + Math.random() * 1.2 + (raw.entropy || 0) * 2,
+        twinkleSpeed: 0.6 + Math.random() * 1.2 + (raw.touched ? 2 : 0),
         mass: raw.radius + raw.degree * 6,
-        energyLevel: energyLevelFor(raw.entropy),
         flashUntil: 0,
         spawnAt,
         spawnDoneAt: spawnAt + NEW_FILE_SPAWN_MS,
@@ -299,14 +291,10 @@
       n.cy = c.y;
       n.fixed = false;
       n.phase = Math.random() * Math.PI * 2;
-      // the higher the entropy (more frequent changes), the faster/more "restless" the twinkle
-      n.twinkleSpeed = 0.6 + Math.random() * 1.2 + (n.entropy || 0) * 2;
+      // files touched by the latest commit twinkle a bit faster/more "restless"
+      n.twinkleSpeed = 0.6 + Math.random() * 1.2 + (n.touched ? 2 : 0);
       // gravity mass: the bigger the file and the more it's depended on, the more it warps the spacetime grid around it
       n.mass = n.radius + n.degree * 6;
-      // discrete "energy level" (0-4) bucketed from entropy — a quantum-jump-style analogue to
-      // the continuous entropy jitter above: this only ever changes in whole steps, on refresh
-      // (see refreshEnergyLevels), not smoothly frame-to-frame
-      n.energyLevel = energyLevelFor(n.entropy);
       n.flashUntil = 0;
     }
   }
@@ -361,9 +349,9 @@
       // pull back toward the center of its own nebula
       fx += (n.cx - n.x) * CENTER_PULL;
       fy += (n.cy - n.y) * CENTER_PULL;
-      // entropy: the more often a file changes, the more visible its random "thermal motion"
-      if (n.entropy) {
-        const heat = n.entropy * 2.2;
+      // a file touched by the latest commit gets a visible random "thermal motion"
+      if (n.touched) {
+        const heat = 2.2;
         fx += (Math.random() - 0.5) * heat;
         fy += (Math.random() - 0.5) * heat;
       }
@@ -599,10 +587,10 @@
       ctx.fillStyle = coreColor(n.color, n.intensity);
       ctx.fill();
 
-      // Energy-level jump: a discrete event (see refreshEnergyLevels), so it flashes as an
+      // Touched-state flip: a discrete event (see refreshTouchedFiles), so it flashes as an
       // expanding ring rather than blending in with the continuous twinkle/glow above
       if (n.flashUntil && t * 1000 < n.flashUntil) {
-        const remain = (n.flashUntil - t * 1000) / ENERGY_FLASH_MS; // 1 -> 0
+        const remain = (n.flashUntil - t * 1000) / TOUCH_FLASH_MS; // 1 -> 0
         ctx.beginPath();
         ctx.arc(sx, sy, r * (1 + (1 - remain) * 5), 0, Math.PI * 2);
         ctx.strokeStyle = `rgba(255,255,255,${(remain * 0.8).toFixed(3)})`;
@@ -1054,7 +1042,7 @@
     selectedId = n.id;
     if (audioEnabled) window.CosmosAudio && window.CosmosAudio.pluck(n);
     panelTitle.textContent = n.label;
-    panelMeta.textContent = `${n.id} · ${(n.size / 1024).toFixed(1)} KB · degree ${n.degree}${gitRepo ? ` · entropy ${n.entropy} (touched by ${n.churn} commits)` : ''}`;
+    panelMeta.textContent = `${n.id} · ${(n.size / 1024).toFixed(1)} KB · degree ${n.degree}${gitRepo ? (n.touched ? ' · touched by the latest commit' : ' · not in the latest commit') : ''}`;
     panelBody.innerHTML = '<p class="sub">Loading…</p>';
     panel.classList.add('open');
 
@@ -1111,11 +1099,14 @@
       .map(([ext, color]) => `<span class="legend-item"><span class="dot" style="background:${color}"></span>${ext || '(no extension)'}</span>`)
       .join('');
 
-    avgEntropy = nodes.length ? nodes.reduce((s, n) => s + (n.entropy || 0), 0) / nodes.length : 0;
+    // fraction of files touched by the latest commit — still a continuous 0..1 aggregate even
+    // though each file's own `touched` is now a boolean, so it still works as the ambient
+    // "how much just happened" signal audio.js's updateEntropy expects
+    avgEntropy = nodes.length ? nodes.reduce((s, n) => s + (n.touched ? 1 : 0), 0) / nodes.length : 0;
 
     initLayout();
     loop();
-    setInterval(refreshEnergyLevels, ENERGY_REFRESH_MS);
+    setInterval(refreshTouchedFiles, REFRESH_INTERVAL_MS);
   }
 
   main().catch((err) => {
