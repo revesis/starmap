@@ -375,7 +375,7 @@
     const SPRING_LEN = 70;
     const CENTER_PULL = 0.004;
     const DAMPING = 0.82;
-    const MAX_SPEED = 4; // hard velocity ceiling — scenario A's "shared-units speed cap", not a uniform time-scale
+    const MAX_SPEED = 1.5; // hard velocity ceiling — scenario A's "shared-units speed cap", not a uniform time-scale
     const BIG_BANG_MS = 2500; // no speed limit for this long after initLayout — the cap only "switches on" afterward
     const speedCapped = performance.now() - simStartTime > BIG_BANG_MS;
 
