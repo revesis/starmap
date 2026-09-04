@@ -129,6 +129,19 @@
     return Math.min(4, Math.floor((entropy || 0) * 5));
   }
 
+  // 0..1 render scale for a particle's spawn-in/despawn-out animation (see spawnIncomingNodes and
+  // despawnNode); 0 means "don't draw it at all". A plain existing particle always returns 1.
+  function nodePresence(n, tMs) {
+    if (n.spawnAt && tMs < n.spawnAt) return 0;
+    if (n.spawnDoneAt && tMs < n.spawnDoneAt) {
+      return Math.max(0, Math.min(1, (tMs - n.spawnAt) / NEW_FILE_SPAWN_MS));
+    }
+    if (n.removeStartAt) {
+      return Math.max(0, Math.min(1, 1 - (tMs - n.removeStartAt) / REMOVE_FADE_MS));
+    }
+    return 1;
+  }
+
   // Periodically re-scans (via /api/refresh) and checks each particle's discrete energy level.
   // Unlike the continuous entropy jitter, a level only changes in whole steps — when it does, we
   // flag a brief flash instead of interpolating, the visual analogue of a quantum jump rather
@@ -149,6 +162,7 @@
       const res = await fetch('/api/refresh', { method: 'POST' });
       const data = await res.json();
       plucksThisBatch = 0;
+      const freshIds = new Set(data.nodes.map((raw) => raw.id));
       const incoming = [];
       for (const updated of data.nodes) {
         const n = nodeById.get(updated.id);
@@ -163,6 +177,9 @@
         }
       }
       if (incoming.length) spawnIncomingNodes(incoming, data.edges);
+      for (const n of nodes) {
+        if (!n.removeStartAt && !freshIds.has(n.id)) despawnNode(n);
+      }
     } catch {
       // a failed refresh just means we try again next interval
     }
@@ -214,6 +231,39 @@
       t.degree += 1;
     }
 
+    rootLabel.textContent = `${nodes.length} particles · ${edges.length} strings${gitRepo ? ' · git connected' : ''}`;
+  }
+
+  // A file no longer in the scan (deleted, or moved so its old path vanished) shrinks out over
+  // REMOVE_FADE_MS — the mirror image of spawnIncomingNodes' grow-in — then is actually removed
+  // from nodes/edges. It keeps taking part in the physics simulation while shrinking so it
+  // doesn't visually "freeze" mid-collapse.
+  const REMOVE_FADE_MS = 700;
+  function despawnNode(n) {
+    n.removeStartAt = performance.now();
+    n.removeDoneAt = n.removeStartAt + REMOVE_FADE_MS;
+    setTimeout(() => removeNode(n.id), REMOVE_FADE_MS);
+  }
+  function removeNode(id) {
+    const idx = nodes.findIndex((n) => n.id === id);
+    if (idx === -1) return;
+    nodes.splice(idx, 1);
+    nodeById.delete(id);
+    for (let i = edges.length - 1; i >= 0; i--) {
+      const e = edges[i];
+      if (e.source !== id && e.target !== id) continue;
+      edgeKeys.delete(e.source + '=>' + e.target);
+      const s = nodeById.get(e.source);
+      const t = nodeById.get(e.target);
+      if (s) s.degree -= 1;
+      if (t) t.degree -= 1;
+      edges.splice(i, 1);
+    }
+    if (selectedId === id) {
+      selectedId = null;
+      panel.classList.remove('open');
+    }
+    if (hoveredId === id) hoveredId = null;
     rootLabel.textContent = `${nodes.length} particles · ${edges.length} strings${gitRepo ? ' · git connected' : ''}`;
   }
 
@@ -496,16 +546,13 @@
 
     // Particles (files): drawn as "photons" — ripples (wave side) + halo + white-hot core (particle side)
     for (const n of nodes) {
-      // A newly-spawned particle (see spawnIncomingNodes) hasn't reached its staggered entrance
-      // time yet, or is still growing in — skip drawing it entirely before then, and shrink it
-      // toward zero radius while it does, rather than popping straight to full size.
-      if (n.spawnAt && t * 1000 < n.spawnAt) continue;
-      const spawnProgress = n.spawnDoneAt && t * 1000 < n.spawnDoneAt
-        ? Math.max(0, Math.min(1, (t * 1000 - n.spawnAt) / NEW_FILE_SPAWN_MS))
-        : 1;
+      // Skip entirely before a spawn-in starts or after a despawn-out finishes; otherwise scale
+      // toward/away from zero radius rather than popping to full size or vanishing instantly.
+      const presence = nodePresence(n, t * 1000);
+      if (presence <= 0) continue;
 
       const [sx, sy] = worldToScreen(n.x, n.y);
-      const r = Math.max(n.radius * view.scale, 1.4) * spawnProgress;
+      const r = Math.max(n.radius * view.scale, 1.4) * presence;
       if (sx < -50 || sy < -50 || sx > cssW + 50 || sy > cssH + 50) continue;
 
       const rgb = intensityRGB(n.color, n.intensity);
@@ -577,7 +624,7 @@
       ctx.font = '11px sans-serif';
       ctx.fillStyle = 'rgba(230,230,240,0.85)';
       for (const n of nodes) {
-        if (n.spawnAt && t * 1000 < n.spawnAt) continue;
+        if (nodePresence(n, t * 1000) <= 0) continue;
         const [sx, sy] = worldToScreen(n.x, n.y);
         const r = n.radius * view.scale;
         if (sx < -50 || sy < -50 || sx > canvas.width / devicePixelRatio + 50) continue;
