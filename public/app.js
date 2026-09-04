@@ -20,7 +20,13 @@
   let handLandmarks = []; // 21 key points per hand (mirrored, normalized 0..1), drawn on the main canvas
 
   let audioEnabled = false;
+  // Fraction of files touched by the latest commit — a continuous 0..1 aggregate even though each
+  // file's own `touched` is a boolean. Drives both audio.js's ambient drone and the wave-ripple
+  // strength in draw(); recomputed on load and again after every refreshTouchedFiles poll.
   let avgEntropy = 0;
+  function recomputeAvgEntropy() {
+    return nodes.length ? nodes.reduce((s, n) => s + (n.touched ? 1 : 0), 0) / nodes.length : 0;
+  }
 
   // ---- Mobile onboarding: prompt touch devices to go landscape + fullscreen ----
   const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
@@ -173,6 +179,8 @@
       for (const n of nodes) {
         if (!n.removeStartAt && !freshIds.has(n.id)) despawnNode(n);
       }
+      avgEntropy = recomputeAvgEntropy();
+      if (audioEnabled) window.CosmosAudio && window.CosmosAudio.updateEntropy(avgEntropy);
     } catch {
       // a failed refresh just means we try again next interval
     }
@@ -532,7 +540,7 @@
       }
     }
 
-    // Particles (files): drawn as "photons" — halo + white-hot core
+    // Particles (files): drawn as "photons" — wave (touched files only) + halo + white-hot core
     for (const n of nodes) {
       // Skip entirely before a spawn-in starts or after a despawn-out finishes; otherwise scale
       // toward/away from zero radius rather than popping to full size or vanishing instantly.
@@ -549,6 +557,24 @@
       const emphasize = n.id === selectedId || n.id === hoveredId;
 
       if (!dense) {
+        // Wave: a persistent "still part of the latest commit" indicator, shown only on touched
+        // particles — strength tracks avgEntropy (what fraction of the repo the latest commit
+        // touched), not this particle's own properties, so a big commit reads as a wave of
+        // strong ripples and a one-file commit barely shows anything.
+        if (n.touched) {
+          for (let i = 0; i < 2; i++) {
+            const wave = ((t * 0.5 + n.phase / (Math.PI * 2) + i * 0.5) % 1);
+            const waveR = r + wave * r * 3.2;
+            const waveAlpha = (1 - wave) * 0.3 * avgEntropy;
+            if (waveAlpha <= 0.005) continue;
+            ctx.beginPath();
+            ctx.arc(sx, sy, waveR, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(${rgbStr},${waveAlpha.toFixed(3)})`;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        }
+
         // Halo: radial gradient, the brighter the particle the bigger its glow
         const haloR = r * (3 + n.intensity * 2.5);
         const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, haloR);
@@ -1086,10 +1112,7 @@
       .map(([ext, color]) => `<span class="legend-item"><span class="dot" style="background:${color}"></span>${ext || '(no extension)'}</span>`)
       .join('');
 
-    // fraction of files touched by the latest commit — still a continuous 0..1 aggregate even
-    // though each file's own `touched` is now a boolean, so it still works as the ambient
-    // "how much just happened" signal audio.js's updateEntropy expects
-    avgEntropy = nodes.length ? nodes.reduce((s, n) => s + (n.touched ? 1 : 0), 0) / nodes.length : 0;
+    avgEntropy = recomputeAvgEntropy();
 
     initLayout();
     loop();
