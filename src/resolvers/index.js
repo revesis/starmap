@@ -9,6 +9,7 @@ const resolvers = [
   require('./javascript'),
   require('./python'),
   require('./dart'),
+  require('./java'),
 ];
 
 const byExt = new Map();
