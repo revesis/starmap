@@ -47,9 +47,13 @@ starmap [dir] [--port 4550] [--https]
     several files — not one file), since neither language's imports are relative to the importing
     file at all. `rust.js` only follows `mod name;` file-inclusion declarations, not `use` paths
     (resolving `use crate::a::b::Item` needs simulating the whole module tree just to tell
-    whether the last segment is a module or an item). These are known/accepted scope limits (see
-    README "Current scope"). Adding a language means adding one file to `src/resolvers/`, not
-    extending a shared regex list.
+    whether the last segment is a module or an item). `java.js` also recognizes Spring/JSR-330
+    dependency injection (`@Autowired`/`@Inject`/`@Resource` fields and `@Autowired` constructor
+    parameters) as edges, since DI wires a collaborator by type with no `import` at all when both
+    classes share a package — the captured type name reuses the same suffix-match `resolve()` as
+    a normal import, just unqualified. These are known/accepted scope limits (see README "Current
+    scope"). Adding a language means adding one file to `src/resolvers/`, not extending a shared
+    regex list.
   - `computeTouchedByLastCommit` shells out to `git log -n 1 --name-only` to get a per-file boolean
     (`n.touched`, not a graded score) used for jitter and as an ambient sound intensity input.
 - `src/server.js` — `createRequestHandler(rootDir)` is shared by both HTTP and HTTPS servers. Routes:
