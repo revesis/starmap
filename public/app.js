@@ -371,6 +371,7 @@
     const cellSize = 80;
     const grid = buildGrid(cellSize);
     const REPULSE = 900;
+    const REPULSE_RANGE_MULT = 1.8; // repulsion fades to ~0 beyond this many combined-radii of separation
     const GRAVITY = 15; // real mass-based attraction, layered on top of REPULSE (see below)
     const SPRING = 0.02;
     const SPRING_LEN = 70;
@@ -398,7 +399,22 @@
             if (distSq < 1) distSq = 1;
             const dist = Math.sqrt(distSq);
             if (dist > cellSize * 1.5) continue;
-            const force = REPULSE / distSq;
+            // Repulsion is short-range only, scaled by how close the pair is to actually touching
+            // (their combined radii) rather than a fixed pixel distance — full strength right at
+            // contact, squared-falloff to ~0 by REPULSE_RANGE_MULT combined-radii out. Without this,
+            // 1/r^2 repulsion still gives every pair within the neighbor-cell range (up to 120px) a
+            // small but nonzero nudge, and in a dense cluster that constant weak push-everyone-apart
+            // fights the springs/gravity/collision impulses frame after frame — visible as particles
+            // "jittering" even when nothing about them actually changed. Actual overlap resolution
+            // still happens exactly via the collision impulse pass below; this only handles the
+            // gentle "don't get too close" spacing before contact.
+            const minDist = n.radius + other.radius;
+            const repulseRange = minDist * REPULSE_RANGE_MULT;
+            let force = 0;
+            if (dist <= repulseRange) {
+              const falloff = dist <= minDist ? 1 : Math.max(0, 1 - (dist - minDist) / (repulseRange - minDist));
+              force = (REPULSE / distSq) * falloff * falloff;
+            }
             fx += (ddx / dist) * force;
             fy += (ddy / dist) * force;
             // Real gravity, F = G*m1*m2/r² — unlike the gravity-well grid warp (a pure visual
