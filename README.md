@@ -15,7 +15,8 @@ Once started, the terminal prints an `http://localhost:4550` link — open it in
 
 - Scroll to zoom, drag empty space to pan the canvas; touch devices support one-finger drag/tap and two-finger zoom
 - Drag a particle to pin it in place
-- Click a particle: the side panel shows file info; if the directory is a git repo it shows that file's uncommitted diff and recent commit history; otherwise it shows a file content preview
+- Click a particle to highlight it and show its full path; double-click (or double-pinch via camera gestures) to open the side panel with file info — if the directory is a git repo it shows that file's uncommitted diff and recent commit history, otherwise a file content preview
+- If the directory is a git repo, drag the arch-shaped dial at the bottom of the screen to scrub back through commit history: it highlights which files that commit touched and hides particles for files that didn't exist yet as of that point in time
 - The HUD lets you turn on music (click-to-pluck sound effects + an entropy-driven ambient noise floor + a bounded-voice ambient sound field) and camera gestures (one-hand pan, two-hand zoom/rotate, pinch to select)
 - **Add `--https` for LAN/mobile access**: the camera (`getUserMedia`) only works in a secure context — `https://` or `http://localhost`. Accessing via a LAN IP from a phone or other device requires `--https` (needs `openssl` installed on the system; it generates a self-signed cert cached in `~/.cache/starmap/`, and the browser will warn it's "not secure" — just choose to continue). Plain `localhost` access is unaffected; the camera works fine without this flag in that case.
 
@@ -31,8 +32,14 @@ Once started, the terminal prints an `http://localhost:4550` link — open it in
 
 ## Current scope (MVP)
 
-- Dependency resolution currently only handles **relative-path import/require** (JS/JSX/TS/TSX/MJS/CJS/Python);
-  it doesn't resolve `node_modules`/third-party packages, and it isn't a real function-level call graph.
+- Dependency resolution covers JS/JSX/TS/TSX/MJS/CJS, Python, Dart, Java, Go, and Rust (one resolver
+  module per language under `src/resolvers/`), but it's regex-based, not a real function-level call
+  graph, and each language has its own accepted gaps: JS/Python/Dart/Rust only resolve **relative**
+  import paths, not `node_modules`/`package:`/crate-external packages; Java also recognizes
+  Spring/JSR-330 dependency injection (`@Autowired`/`@Inject`/`@Resource` fields and constructors) but
+  skips `import static` and wildcard imports; Go resolves package imports by suffix-matching against
+  the repo's own directories (no `go.mod` module-prefix reading); Rust only follows `mod name;`
+  file-inclusion declarations, not `use` paths.
 - Diff/log come from shelling out to `git diff` / `git log` locally, and only work when the directory is a git repo.
 - Large directories (thousands of files) use a grid approximation for inter-particle repulsion to avoid O(n²), but there's no further optimization beyond viewport culling (e.g. WebGL), so very large file counts may still drop frames.
 
