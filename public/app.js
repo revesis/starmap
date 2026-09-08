@@ -409,7 +409,6 @@
     const SPRING = 0.02;
     const SPRING_LEN = 70;
     const CHAIN_SPRING_LEN = SPRING_LEN * 2; // law-of-cosines straight-chain distance, see rebuildChainSprings
-    const CENTER_PULL = 0.004;
     const DAMPING = 0.82;
     const DRAG_THRESHOLD = 2; // speeds at/below this are completely untouched — normal motion keeps its exact feel
     const DRAG_K = 1; // above DRAG_THRESHOLD, the excess speed gets squashed toward an asymptote of DRAG_THRESHOLD + 1/DRAG_K
@@ -484,17 +483,82 @@
         }
       }
     }
+    // Nebula centroids: each top-level directory's CURRENT center of mass, recomputed fresh every
+    // frame — cheap, since the number of directories is small (one extra O(n) pass over nodes,
+    // then O(k²) over directories). This replaces the old n.cx/n.cy, which was a single point
+    // frozen at layout time (n.cx/n.cy are now spawn-placement-only, see clusterCenterFor). Two
+    // things are built from it below: COHESION (keeps a nebula's own members gathered around
+    // wherever the group actually is right now, instead of a fixed anchor) and CLUSTER_GRAVITY
+    // (real gravity BETWEEN nebulae, treating each one as a single point mass at its centroid).
+    const clusterMass = new Map(); // dir -> total massFactor
+    const clusterSum = new Map(); // dir -> mass-weighted position sum
+    for (const n of nodes) {
+      if (isHistoryHidden(n)) continue;
+      const cmf = massFactor(n);
+      clusterMass.set(n.dir, (clusterMass.get(n.dir) || 0) + cmf);
+      const sum = clusterSum.get(n.dir) || { x: 0, y: 0 };
+      sum.x += n.x * cmf;
+      sum.y += n.y * cmf;
+      clusterSum.set(n.dir, sum);
+    }
+    const clusterCentroid = new Map(); // dir -> {x, y}
+    for (const [dir, mass] of clusterMass) {
+      const sum = clusterSum.get(dir);
+      clusterCentroid.set(dir, { x: sum.x / mass, y: sum.y / mass });
+    }
+
+    const COHESION = 0.004; // same strength as the old CENTER_PULL, now aimed at a live centroid instead of a frozen point
+    // No orbiting: no tangential velocity is ever injected between nebulae, only radial pull, so
+    // combined with the existing per-frame DAMPING, distant nebulae drift straight toward each
+    // other and eventually merge into one packed clump over time — that collapse is the intended
+    // end state, not something to be corrected later.
+    const CLUSTER_GRAVITY = 40;
+    const dirs = [...clusterMass.keys()];
+    const clusterAccel = new Map(); // dir -> acceleration contributed by every OTHER nebula
+    for (const dir of dirs) clusterAccel.set(dir, { x: 0, y: 0 });
+    for (let i = 0; i < dirs.length; i++) {
+      for (let j = i + 1; j < dirs.length; j++) {
+        const dirA = dirs[i], dirB = dirs[j];
+        const a = clusterCentroid.get(dirA), b = clusterCentroid.get(dirB);
+        const ddx = b.x - a.x, ddy = b.y - a.y;
+        let distSq = ddx * ddx + ddy * ddy;
+        if (distSq < 1) distSq = 1;
+        const dist = Math.sqrt(distSq);
+        const massA = clusterMass.get(dirA), massB = clusterMass.get(dirB);
+        const g = (CLUSTER_GRAVITY * massA * massB) / distSq;
+        // Acceleration, not force: divide by each side's OWN total mass, same F=ma as everywhere
+        // else, and apply it uniformly to every member regardless of that member's individual
+        // mass — the equivalence-principle analog of a uniform external field, so a whole nebula
+        // drifts together instead of its heavier files lagging behind its lighter ones.
+        const accA = clusterAccel.get(dirA);
+        accA.x += (ddx / dist) * (g / massA);
+        accA.y += (ddy / dist) * (g / massA);
+        const accB = clusterAccel.get(dirB);
+        accB.x -= (ddx / dist) * (g / massB);
+        accB.y -= (ddy / dist) * (g / massB);
+      }
+    }
+
     for (const n of nodes) {
       if (n.fixed || isHistoryHidden(n)) continue;
       let fx = n._fx, fy = n._fy;
-      // pull back toward the center of its own nebula
-      if (true) {
-        fx += (n.cx - n.x) * CENTER_PULL;
-        fy += (n.cy - n.y) * CENTER_PULL;
+      // pull back toward its own nebula's live centroid (cohesion), not a fixed anchor
+      const centroid = clusterCentroid.get(n.dir);
+      if (centroid) {
+        fx += (centroid.x - n.x) * COHESION;
+        fy += (centroid.y - n.y) * COHESION;
       }
       // F=ma: the same net force nudges a heavier (more internally entangled/active) particle
       // less than a lighter one
       const mf = massFactor(n);
+      // Cluster-gravity acceleration is uniform per nebula (see above) — scale it back up by this
+      // node's own mf so it survives the /mf division below unchanged, same trick used to fold
+      // any acceleration into this fx/mf pipeline.
+      const accel = clusterAccel.get(n.dir);
+      if (accel) {
+        fx += accel.x * mf;
+        fy += accel.y * mf;
+      }
       // Local crowding damping: the more neighbors currently within interaction range, the "thicker"
       // the local medium feels — a busy, many-body cluster is exactly where all these forces
       // compound the most, so it's also where movement should feel the most damped/viscous, not
