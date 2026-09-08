@@ -81,6 +81,59 @@ function computeLastCommitStats(rootDir) {
   return stats;
 }
 
+// Files with uncommitted local changes right now (working tree vs. index vs. HEAD) — unlike
+// computeLastCommitStats above, this is deliberately live/uncommitted state, not history: it's
+// what the file's breathing/twinkle effect maps to, so it reads as "I'm actively editing this"
+// rather than "this was part of whatever I last committed." Porcelain's short format is `XY path`
+// (or `XY old -> new` for a rename) with the path starting at column 3; a rename's own new path is
+// what we care about here, so take the segment after `-> ` when present.
+function computeDirtyFiles(rootDir) {
+  const dirty = new Set();
+  try {
+    const out = execFileSync(
+      'git',
+      ['-C', rootDir, 'status', '--porcelain'],
+      { maxBuffer: 1024 * 1024 * 64 }
+    ).toString('utf8');
+    for (const line of out.split('\n')) {
+      if (!line.trim()) continue;
+      const rel = line.slice(3).split(' -> ').pop().trim();
+      if (rel) dirty.add(rel);
+    }
+  } catch {
+    // not a git repo, or git status failed — leave dirty empty
+  }
+  return dirty;
+}
+
+// Lines added+deleted right now for each dirty TRACKED file, relative to HEAD (staged and
+// unstaged changes both show up in one `git diff HEAD`, so this is a single call) — the live
+// counterpart to computeLastCommitStats, used to scale how fast a dirty file's breathing pulses
+// (more of the file changed -> faster breathing). Untracked files never appear here (there's
+// nothing in HEAD to diff against); build() below treats those as "fully new" instead.
+function computeDirtyStats(rootDir) {
+  const stats = new Map();
+  try {
+    const out = execFileSync(
+      'git',
+      ['-C', rootDir, 'diff', 'HEAD', '--numstat'],
+      { maxBuffer: 1024 * 1024 * 64 }
+    ).toString('utf8');
+    for (const line of out.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const [addedStr, deletedStr, rel] = trimmed.split('\t');
+      if (!rel) continue;
+      const added = addedStr === '-' ? 0 : parseInt(addedStr, 10) || 0;
+      const deleted = deletedStr === '-' ? 0 : parseInt(deletedStr, 10) || 0;
+      stats.set(rel, added + deleted);
+    }
+  } catch {
+    // no HEAD commit yet, or git diff failed — leave stats empty
+  }
+  return stats;
+}
+
 // A window of commit history for the frontend's time dial: each commit's timestamp plus which
 // files it touched (and how many lines), so the dial can highlight "what changed" as of some
 // earlier point instead of only the latest commit. Deliberately paged (limit + optional
@@ -143,6 +196,8 @@ function build(rootDir, files, gitRepo) {
   const minSize = Math.min(...sizes, 0);
   const maxSize = Math.max(...sizes, 1);
   const lastCommitStats = gitRepo ? computeLastCommitStats(rootDir) : new Map();
+  const dirtyFiles = gitRepo ? computeDirtyFiles(rootDir) : new Set();
+  const dirtyStats = gitRepo ? computeDirtyStats(rootDir) : new Map();
 
   const nodes = files.map((f) => ({
     id: f.rel,
@@ -157,6 +212,8 @@ function build(rootDir, files, gitRepo) {
     outDegree: 0, // how many other files this one imports
     touched: lastCommitStats.has(f.rel),
     changeRatio: 0, // filled in below, only for touched files
+    dirty: dirtyFiles.has(f.rel), // uncommitted local changes right now — see computeDirtyFiles
+    dirtyChangeRatio: 0, // filled in below, only for dirty files
   }));
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
@@ -174,6 +231,28 @@ function build(rootDir, files, gitRepo) {
       n.changeRatio = Math.round(Math.min(1, changedLines / totalLines) * 100) / 100;
     } catch {
       // unreadable file — leave changeRatio at 0
+    }
+  }
+
+  // dirtyChangeRatio = the live counterpart of changeRatio, for files with uncommitted changes
+  // right now. An untracked file (dirty but not in dirtyStats, since there's no HEAD version to
+  // diff against) counts as "fully new" — ratio 1, the fastest breathing rate.
+  for (const rel of dirtyFiles) {
+    const n = nodeById.get(rel);
+    if (!n) continue;
+    if (!dirtyStats.has(rel)) {
+      n.dirtyChangeRatio = 1;
+      continue;
+    }
+    const f = files.find((file) => file.rel === rel);
+    if (!f) continue;
+    try {
+      const content = fs.readFileSync(f.abs, 'utf8');
+      if (isProbablyBinary(content)) continue;
+      const totalLines = content.split('\n').length || 1;
+      n.dirtyChangeRatio = Math.round(Math.min(1, dirtyStats.get(rel) / totalLines) * 100) / 100;
+    } catch {
+      // unreadable file — leave dirtyChangeRatio at 0
     }
   }
 

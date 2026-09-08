@@ -68,6 +68,7 @@
   let gitRepo = false;
   let nodeById = new Map();
   let edgeKeys = new Set(); // "source=>target" for edges already added, so refresh-time merges can dedupe cheaply
+  let chainSprings = []; // {a, b} pred/succ pairs for degree-2 chain nodes — see rebuildChainSprings
   let clusterCenters = new Map(); // dir -> {x, y}, persisted across refreshes so new files in a known dir join it
   let clusterR = 260;
 
@@ -165,6 +166,20 @@
     return Math.min(MASS_FACTOR_MAX, Math.max(MASS_FACTOR_MIN, n.mass / (avgMass || 1)));
   }
 
+  // Repulsion's "charge" is deliberately NOT mass — mass (via outDegree) is how gravity decides
+  // how hard a hub node pulls its neighbors in, and reusing it for repulsion too meant a
+  // heavily-imported hub's repulsion scaled up right along with its gravity, flinging every one of
+  // its (otherwise light) neighbors away violently once they crossed into the repulsion zone. Charge
+  // is just the particle's own radius: independent of how many edges touch it, so a hub with a huge
+  // outDegree but an ordinary file size repels its neighbors the same as anyone else its size would.
+  // This does give up the exact "repulsion == gravity at contact" equilibrium from before — the
+  // crossing point is no longer guaranteed to land precisely on minDist for every pair — but actual
+  // overlap is still resolved exactly by the collision impulse + position correction pass, so a
+  // slightly-off equilibrium just means "settles a few px off contact," not "doesn't settle."
+  function charge(n) {
+    return n.radius;
+  }
+
   // 0..1 render scale for a particle's spawn-in/despawn-out animation (see spawnIncomingNodes and
   // despawnNode); 0 means "don't draw it at all". A plain existing particle always returns 1.
   function nodePresence(n, tMs) {
@@ -205,6 +220,8 @@
         if (!n) { incoming.push(updated); continue; }
         n.changeRatio = updated.changeRatio;
         n.mass = computeMass(n);
+        n.dirty = updated.dirty;
+        n.dirtyChangeRatio = updated.dirtyChangeRatio;
         if (updated.touched !== n.touched) {
           n.touched = updated.touched;
           n.flashUntil = performance.now() + TOUCH_FLASH_MS;
@@ -245,7 +262,6 @@
         cy: c.y,
         fixed: false,
         phase: Math.random() * Math.PI * 2,
-        twinkleSpeed: 0.6 + Math.random() * 1.2 + (raw.touched ? 2 : 0),
         mass: computeMass(raw),
         flashUntil: 0,
         spawnAt,
@@ -271,6 +287,7 @@
       t.inDegree += 1;
     }
 
+    rebuildChainSprings();
     rootLabel.textContent = `${nodes.length} particles · ${edges.length} strings${gitRepo ? ' · git connected' : ''}`;
   }
 
@@ -284,6 +301,29 @@
     n.removeDoneAt = n.removeStartAt + REMOVE_FADE_MS;
     setTimeout(() => removeNode(n.id), REMOVE_FADE_MS);
   }
+  // A node with exactly one incoming and one outgoing edge sits on an import "chain" (A -> B -> C).
+  // Bond-angle stiffness in real molecules keeps a chain extended instead of letting it coil up; the
+  // cheap way to fake that without ever computing an actual angle is the law-of-cosines trick used by
+  // rope/cloth sims: if both A-B and B-C are held near SPRING_LEN, their 1-3 distance A-C is exactly
+  // 2*SPRING_LEN only when the A-B-C angle is a straight 180 degrees, so adding an ordinary spring
+  // straight from A to C with that rest length pulls the chain toward "straightened" for free.
+  function rebuildChainSprings() {
+    const predOf = new Map();
+    const succOf = new Map();
+    for (const e of edges) {
+      predOf.set(e.target, (predOf.get(e.target) || []).concat(e.source));
+      succOf.set(e.source, (succOf.get(e.source) || []).concat(e.target));
+    }
+    chainSprings = [];
+    for (const n of nodes) {
+      if (n.inDegree !== 1 || n.outDegree !== 1) continue;
+      const a = predOf.get(n.id)[0];
+      const b = succOf.get(n.id)[0];
+      if (a === b) continue; // a 2-cycle (A <-> B) isn't a chain, it's a loop back on itself
+      chainSprings.push({ a, b });
+    }
+  }
+
   function removeNode(id) {
     const idx = nodes.findIndex((n) => n.id === id);
     if (idx === -1) return;
@@ -299,6 +339,7 @@
       if (t) { t.degree -= 1; t.inDegree -= 1; }
       edges.splice(i, 1);
     }
+    rebuildChainSprings();
     if (selectedId === id) {
       selectedId = null;
       panel.classList.remove('open');
@@ -318,14 +359,8 @@
     return clusterCenters.get(dir);
   }
 
-  // Marks when the simulation actually started (set once, in initLayout — not re-triggered by
-  // later file spawns/despawns, since this is a one-time "big bang" moment for the whole layout,
-  // not a per-particle thing). Used by step()'s MAX_SPEED cap below.
-  let simStartTime = 0;
-
   // ---- Layout: cluster into per-directory "nebulae", force-directed within each cluster ----
   function initLayout() {
-    simStartTime = performance.now();
     const dirs = [...new Set(nodes.map((n) => n.dir))];
     clusterCenters = new Map();
     clusterR = 260 * Math.max(1, Math.sqrt(dirs.length));
@@ -345,8 +380,6 @@
       n.cy = c.y;
       n.fixed = false;
       n.phase = Math.random() * Math.PI * 2;
-      // files touched by the latest commit twinkle a bit faster/more "restless"
-      n.twinkleSpeed = 0.6 + Math.random() * 1.2 + (n.touched ? 2 : 0);
       n.mass = computeMass(n);
       n.flashUntil = 0;
     }
@@ -370,16 +403,17 @@
   function step() {
     const cellSize = 80;
     const grid = buildGrid(cellSize);
-    const REPULSE = 900;
-    const REPULSE_RANGE_MULT = 1.8; // repulsion fades to ~0 beyond this many combined-radii of separation
+    const REPULSE_DECAY_FRAC = 0.18; // decay length as a fraction of a pair's combined radii — short, for a steep Pauli-exclusion-style "wall" right at contact
+    const REPULSE_K = 5; // charge-based repulsion coefficient — see charge() below
     const GRAVITY = 15; // real mass-based attraction, layered on top of REPULSE (see below)
     const SPRING = 0.02;
     const SPRING_LEN = 70;
+    const CHAIN_SPRING_LEN = SPRING_LEN * 2; // law-of-cosines straight-chain distance, see rebuildChainSprings
     const CENTER_PULL = 0.004;
     const DAMPING = 0.82;
-    const MAX_SPEED = 1.5; // hard velocity ceiling — scenario A's "shared-units speed cap", not a uniform time-scale
-    const BIG_BANG_MS = 2500; // no speed limit for this long after initLayout — the cap only "switches on" afterward
-    const speedCapped = performance.now() - simStartTime > BIG_BANG_MS;
+    const DRAG_THRESHOLD = 2; // speeds at/below this are completely untouched — normal motion keeps its exact feel
+    const DRAG_K = 1; // above DRAG_THRESHOLD, the excess speed gets squashed toward an asymptote of DRAG_THRESHOLD + 1/DRAG_K
+    const CROWD_K = 0.08; // how hard local crowding damps extra — see crowdDamping below
 
     // Repulsion + gravity: only compare within the same cell and neighboring cells
     for (const n of nodes) {
@@ -387,6 +421,7 @@
       const gx = Math.floor(n.x / cellSize);
       const gy = Math.floor(n.y / cellSize);
       let fx = 0, fy = 0;
+      let neighborCount = 0; // how many other particles are within interaction range right now — see crowdDamping below
       for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {
           const arr = grid.get((gx + dx) + ',' + (gy + dy));
@@ -399,30 +434,35 @@
             if (distSq < 1) distSq = 1;
             const dist = Math.sqrt(distSq);
             if (dist > cellSize * 1.5) continue;
-            // Repulsion is short-range only, scaled by how close the pair is to actually touching
-            // (their combined radii) rather than a fixed pixel distance — full strength right at
-            // contact, squared-falloff to ~0 by REPULSE_RANGE_MULT combined-radii out. Without this,
-            // 1/r^2 repulsion still gives every pair within the neighbor-cell range (up to 120px) a
-            // small but nonzero nudge, and in a dense cluster that constant weak push-everyone-apart
-            // fights the springs/gravity/collision impulses frame after frame — visible as particles
-            // "jittering" even when nothing about them actually changed. Actual overlap resolution
-            // still happens exactly via the collision impulse pass below; this only handles the
-            // gentle "don't get too close" spacing before contact.
+            neighborCount++;
+            // Repulsion is exponential-in-overlap (Born-Mayer style), not 1/r^2 (Coulomb-style):
+            // it's finite everywhere, never infinite even fully overlapped, so dragging one particle
+            // directly onto another can't spike the force to an unbounded ceiling in a single frame.
+            //
+            // Its peak strength is charge-based (see charge() above), not mass-based — deliberately
+            // decoupled from gravity's mass scaling, so a heavily-imported hub node doesn't also
+            // repel every neighbor harder just because it has a big outDegree.
+            //
+            // No hard cutoff at contact: a hard "overlap <= 0 -> exactly 0" boundary was tried and
+            // caused a real oscillation — gravity (always active within range) keeps pulling a pair
+            // back together, they cross into overlap, the hard cutoff means repulsion jumps from 0
+            // straight to a nonzero value right at that boundary, which is often enough to overshoot
+            // back OUT of overlap, where repulsion snaps back to 0 and gravity pulls them right back
+            // in again — a sustained attract/kick/attract/kick cycle, worse for edge-connected pairs
+            // (the spring keeps re-injecting them) but present even for unconnected ones (gravity
+            // alone is enough to keep re-triggering it). A smooth exponential tail has no such jump:
+            // it decays continuously to a negligible-but-nonzero value past contact, so there's
+            // nothing for gravity to "win against" suddenly — the transition is gradual either way.
             const minDist = n.radius + other.radius;
-            const repulseRange = minDist * REPULSE_RANGE_MULT;
-            let force = 0;
-            if (dist <= repulseRange) {
-              const falloff = dist <= minDist ? 1 : Math.max(0, 1 - (dist - minDist) / (repulseRange - minDist));
-              force = (REPULSE / distSq) * falloff * falloff;
-            }
+            const overlap = minDist - dist; // > 0 once clouds overlap, < 0 while still apart
+            const decayLen = minDist * REPULSE_DECAY_FRAC;
+            const force = REPULSE_K * charge(n) * charge(other) * Math.exp(overlap / decayLen);
             fx += (ddx / dist) * force;
             fy += (ddy / dist) * force;
             // Real gravity, F = G*m1*m2/r² — unlike the gravity-well grid warp (a pure visual
             // effect that never touches particle positions), this actually pulls particles
             // toward each other, scaled by BOTH particles' massFactor. Kept to the same
-            // neighbor-only range as repulsion above (not a true O(n²) all-pairs force) and kept
-            // small relative to REPULSE so it nudges rather than overriding the packing/spacing
-            // repulsion already provides.
+            // neighbor-only range as repulsion above (not a true O(n²) all-pairs force).
             const g = (GRAVITY * massFactor(n) * massFactor(other)) / distSq;
             fx -= (ddx / dist) * g;
             fy -= (ddy / dist) * g;
@@ -430,84 +470,190 @@
         }
       }
       // pull back toward the center of its own nebula
-      fx += (n.cx - n.x) * CENTER_PULL;
-      fy += (n.cy - n.y) * CENTER_PULL;
+      if (true) {
+        fx += (n.cx - n.x) * CENTER_PULL;
+        fy += (n.cy - n.y) * CENTER_PULL;
+      }
       // F=ma: the same net force nudges a heavier (more internally entangled/active) particle
       // less than a lighter one
       const mf = massFactor(n);
-      n.vx = (n.vx + fx / mf) * DAMPING;
-      n.vy = (n.vy + fy / mf) * DAMPING;
+      // Local crowding damping: the more neighbors currently within interaction range, the "thicker"
+      // the local medium feels — a busy, many-body cluster is exactly where all these forces
+      // compound the most, so it's also where movement should feel the most damped/viscous, not
+      // move at the same speed as an isolated pair drifting in open space. 1/(1+CROWD_K*neighborCount)
+      // is barely noticeable with a couple of neighbors and increasingly aggressive in a dense knot.
+      const crowdDamping = 1 / (1 + CROWD_K * neighborCount);
+      n.vx = (n.vx + fx / mf) * DAMPING * crowdDamping;
+      n.vy = (n.vy + fy / mf) * DAMPING * crowdDamping;
     }
 
     // Collisions: when two particles actually overlap, exchange velocity via the impulse-
     // momentum theorem (F*dt = m*dv) instead of just letting the continuous repulsion above push
     // them apart. Unlike repulsion/gravity (each node independently computes its own force),
     // this modifies both sides of a pair at once, so each unordered pair is resolved exactly once
-    // (the `n.id >= other.id` check) rather than once per node. A .fixed particle (user-dragged)
-    // is treated as infinite mass — it can still be collided with, but never gets knocked around.
-    const RESTITUTION = 0.6; // 1 = perfectly elastic bounce, 0 = particles just stop dead-on
-    for (const n of nodes) {
-      if (isHistoryHidden(n)) continue;
-      const gx = Math.floor(n.x / cellSize);
-      const gy = Math.floor(n.y / cellSize);
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
-          const arr = grid.get((gx + dx) + ',' + (gy + dy));
-          if (!arr) continue;
-          for (const other of arr) {
-            if (other === n || n.id >= other.id || (n.fixed && other.fixed)) continue;
-            const ddx = other.x - n.x;
-            const ddy = other.y - n.y;
-            const minDist = n.radius + other.radius;
-            const distSq = ddx * ddx + ddy * ddy;
-            if (distSq >= minDist * minDist || distSq < 1e-6) continue;
-            const dist = Math.sqrt(distSq);
-            const nx = ddx / dist, ny = ddy / dist; // collision normal, n -> other
-            const vn = (other.vx - n.vx) * nx + (other.vy - n.vy) * ny; // closing speed along normal
-            if (vn >= 0) continue; // already moving apart
-            const invM1 = n.fixed ? 0 : 1 / massFactor(n);
-            const invM2 = other.fixed ? 0 : 1 / massFactor(other);
-            const j = (-(1 + RESTITUTION) * vn) / (invM1 + invM2);
-            n.vx -= j * invM1 * nx;
-            n.vy -= j * invM1 * ny;
-            other.vx += j * invM2 * nx;
-            other.vy += j * invM2 * ny;
+    // per pass (the `n.id >= other.id` check) rather than once per node. A .fixed particle
+    // (user-dragged) is treated as infinite mass — it can still be collided with, but never gets
+    // knocked around.
+    //
+    // A single pass over all pairs doesn't converge once many particles are touching at the same
+    // time: fixing pair (A,B) can re-disturb pair (B,C) that was already resolved earlier in the
+    // same pass, and the more simultaneous contacts a cluster has, the worse that residual gets —
+    // which is exactly why "more particles piling up" made the oscillation come back even with a
+    // near-zero RESTITUTION. Running several relaxation passes per frame (Gauss-Seidel style) lets
+    // that residual settle down instead of carrying into the next frame.
+    //
+    const RESTITUTION = 0.05; // 1 = perfectly elastic bounce, 0 = particles just stop dead-on — near-0 so contact actually absorbs the closing speed gravity/center-pull keep feeding in, instead of bouncing it back into another oscillation cycle
+    const COLLISION_ITERATIONS = 4;
+
+    // Pass 1 — velocity only. Repeated resolution converges here because each pass drives the
+    // closing speed of a pair toward zero (bounded by RESTITUTION), so more iterations just means
+    // "settle the whole contact network more thoroughly," never "push harder."
+    for (let iter = 0; iter < COLLISION_ITERATIONS; iter++) {
+      for (const n of nodes) {
+        if (isHistoryHidden(n)) continue;
+        const gx = Math.floor(n.x / cellSize);
+        const gy = Math.floor(n.y / cellSize);
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            const arr = grid.get((gx + dx) + ',' + (gy + dy));
+            if (!arr) continue;
+            for (const other of arr) {
+              if (other === n || n.id >= other.id || (n.fixed && other.fixed)) continue;
+              const ddx = other.x - n.x;
+              const ddy = other.y - n.y;
+              const minDist = n.radius + other.radius;
+              const distSq = ddx * ddx + ddy * ddy;
+              if (distSq >= minDist * minDist || distSq < 1e-6) continue;
+              const dist = Math.sqrt(distSq);
+              const nx = ddx / dist, ny = ddy / dist; // collision normal, n -> other
+              const vn = (other.vx - n.vx) * nx + (other.vy - n.vy) * ny; // closing speed along normal
+              if (vn >= 0) continue; // already moving apart
+
+              const invM1 = n.fixed ? 0 : 1 / massFactor(n);
+              const invM2 = other.fixed ? 0 : 1 / massFactor(other);
+              const invMSum = invM1 + invM2;
+              if (invMSum <= 0) continue; // both fixed
+
+              const j = (-(1 + RESTITUTION) * vn) / invMSum;
+              if (invM1 > 0) { n.vx -= j * invM1 * nx; n.vy -= j * invM1 * ny; }
+              if (invM2 > 0) { other.vx += j * invM2 * nx; other.vy += j * invM2 * ny; }
+            }
+          }
+        }
+      }
+    }
+
+    // Pass 2 — position correction, kept entirely separate from the velocity pass above and run a
+    // small fixed number of times. Unlike velocity resolution, pushing positions apart has no
+    // built-in damping: a particle overlapping several neighbors at once
+    // gets nudged by each pair independently, and letting that compound across up to 20 dynamic
+    // iterations was exactly what turned a tightly packed cluster into a single-frame "explosion."
+    // MAX_POSITION_CORRECTION caps how far any *one* pair-resolution can push in a single
+    // application (the standard fix real physics engines use, e.g. Box2D's b2_maxLinearCorrection)
+    // — deep overlaps just take a couple more frames to fully separate instead of being shoved out
+    // all at once.
+    const POSITION_CORRECTION = 0.2; // fraction of overlap depth pushed apart directly, per pass
+    const MAX_POSITION_CORRECTION = 4; // px — hard ceiling on a single pair's push-apart distance per pass
+    const POSITION_ITERATIONS = 2;
+    for (let iter = 0; iter < POSITION_ITERATIONS; iter++) {
+      for (const n of nodes) {
+        if (isHistoryHidden(n)) continue;
+        const gx = Math.floor(n.x / cellSize);
+        const gy = Math.floor(n.y / cellSize);
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            const arr = grid.get((gx + dx) + ',' + (gy + dy));
+            if (!arr) continue;
+            for (const other of arr) {
+              if (other === n || n.id >= other.id || (n.fixed && other.fixed)) continue;
+              const ddx = other.x - n.x;
+              const ddy = other.y - n.y;
+              const minDist = n.radius + other.radius;
+              const distSq = ddx * ddx + ddy * ddy;
+              if (distSq >= minDist * minDist || distSq < 1e-6) continue;
+              const dist = Math.sqrt(distSq);
+              const nx = ddx / dist, ny = ddy / dist;
+              const overlap = minDist - dist;
+              if (overlap <= 0) continue;
+
+              const invM1 = n.fixed ? 0 : 1 / massFactor(n);
+              const invM2 = other.fixed ? 0 : 1 / massFactor(other);
+              const invMSum = invM1 + invM2;
+              if (invMSum <= 0) continue;
+
+              const totalCorrection = Math.min(overlap * POSITION_CORRECTION, MAX_POSITION_CORRECTION);
+              const corr = totalCorrection / invMSum;
+              if (invM1 > 0) { n.x -= corr * invM1 * nx; n.y -= corr * invM1 * ny; }
+              if (invM2 > 0) { other.x += corr * invM2 * nx; other.y += corr * invM2 * ny; }
+            }
           }
         }
       }
     }
 
     // Springs: pull dependency-connected nodes closer together
-    for (const e of edges) {
-      const s = nodeById.get(e.source);
-      const t = nodeById.get(e.target);
-      if (!s || !t) continue;
-      if (isHistoryHidden(s) || isHistoryHidden(t)) continue;
-      let dx = t.x - s.x;
-      let dy = t.y - s.y;
-      let dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const diff = (dist - SPRING_LEN) * SPRING;
-      const fx = (dx / dist) * diff;
-      const fy = (dy / dist) * diff;
-      if (!s.fixed) { s.vx += fx / massFactor(s); s.vy += fy / massFactor(s); }
-      if (!t.fixed) { t.vx -= fx / massFactor(t); t.vy -= fy / massFactor(t); }
+    if (true) {
+      for (const e of edges) {
+        const s = nodeById.get(e.source);
+        const t = nodeById.get(e.target);
+        if (!s || !t) continue;
+        if (isHistoryHidden(s) || isHistoryHidden(t)) continue;
+        let dx = t.x - s.x;
+        let dy = t.y - s.y;
+        let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const diff = (dist - SPRING_LEN) * SPRING;
+        const fx = (dx / dist) * diff;
+        const fy = (dy / dist) * diff;
+        if (!s.fixed) { s.vx += fx / massFactor(s); s.vy += fy / massFactor(s); }
+        if (!t.fixed) { t.vx -= fx / massFactor(t); t.vy -= fy / massFactor(t); }
+      }
     }
 
-    // Speed cap ("scenario A"): nothing in the shared world-coordinate system can move faster
-    // than MAX_SPEED, no matter how much force/mass/collision math above pushed it — the closer a
-    // particle's uncapped speed gets to this ceiling, the harder this clamps it back, so busy,
-    // heavily-forced moments (dense clusters, lots of collisions) are exactly where this is most
-    // visible, same as relativistic speed limits biting hardest near c. For the first
-    // BIG_BANG_MS after the layout starts, this is switched off entirely — the initial explosive
-    // spread-out from everyone's starting jitter gets to run free, like cosmic inflation
-    // outrunning the (later-established) speed limit, before it kicks in for the rest of the run.
+    // Chain stiffness ("bond angle" approximation): straighten out A -> B -> C import chains by
+    // springing A directly to C at CHAIN_SPRING_LEN, instead of letting them coil up under
+    // repulsion/gravity alone — see rebuildChainSprings for why this rest length works.
+    if (true) {
+      for (const cs of chainSprings) {
+        const a = nodeById.get(cs.a);
+        const b = nodeById.get(cs.b);
+        if (!a || !b) continue;
+        if (isHistoryHidden(a) || isHistoryHidden(b)) continue;
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const diff = (dist - CHAIN_SPRING_LEN) * SPRING;
+        const fx = (dx / dist) * diff;
+        const fy = (dy / dist) * diff;
+        if (!a.fixed) { a.vx += fx / massFactor(a); a.vy += fy / massFactor(a); }
+        if (!b.fixed) { b.vx -= fx / massFactor(b); b.vy -= fy / massFactor(b); }
+      }
+    }
+
+    // Position integration, plus the speed-dependent drag below — the old hard MAX_SPEED clamp
+    // (a flat ceiling with a "big bang" grace period before it switched on) was removed in favor
+    // of that drag: a continuous, soft ceiling reads better than a flat cutoff, and doesn't need a
+    // separate exemption window for the initial explosive spread-out.
     for (const n of nodes) {
       if (n.fixed || isHistoryHidden(n)) continue;
-      const speed = Math.hypot(n.vx, n.vy);
-      if (speedCapped && speed > MAX_SPEED) {
-        n.vx = (n.vx / speed) * MAX_SPEED;
-        n.vy = (n.vy / speed) * MAX_SPEED;
+      let speed = Math.hypot(n.vx, n.vy);
+
+      // Speed-dependent drag, applied only to the PORTION of speed above DRAG_THRESHOLD: normal
+      // motion (at/below the threshold) is completely untouched, so this can't be felt as sluggish
+      // during ordinary panning/settling. Only the excess above the threshold gets squashed by
+      // 1/(1+DRAG_K*excess) — a soft ceiling, not a hard clamp, so however "离谱" the excess speed
+      // is, the corrected total speed asymptotically approaches DRAG_THRESHOLD + 1/DRAG_K rather
+      // than growing without bound (a runaway collision cascade in a dense cluster) or snapping to
+      // one fixed number the instant a hard cap is crossed.
+      if (speed > DRAG_THRESHOLD) {
+        const excess = speed - DRAG_THRESHOLD;
+        const dampedExcess = excess / (1 + DRAG_K * excess);
+        const newSpeed = DRAG_THRESHOLD + dampedExcess;
+        const scale = newSpeed / speed;
+        n.vx *= scale;
+        n.vy *= scale;
+        speed = newSpeed;
       }
+
       n.x += n.vx;
       n.y += n.vy;
     }
@@ -711,9 +857,16 @@
 
       const rgb = intensityRGB(n.color, n.intensity);
       const rgbStr = rgb.join(',');
-      const twinkle = 0.85 + 0.15 * Math.sin(t * n.twinkleSpeed + n.phase);
-      const emphasize = n.id === selectedId || n.id === hoveredId;
-
+      // Breathing/twinkle: no random baseline any more — a clean file just sits still (twinkle=1);
+      // only a file with uncommitted local changes right now pulses, distinct from the wave rings
+      // above, which reflect the last COMMIT instead of the live working tree. Speed scales with
+      // dirtyChangeRatio (how much of the file's own content is currently changed, live) — a
+      // one-line tweak breathes slowly, a near-total rewrite breathes noticeably faster.
+      const DIRTY_BREATH_MIN = 1;
+      const DIRTY_BREATH_MAX = 5;
+      const twinkle = n.dirty
+        ? 0.85 + 0.15 * Math.sin(t * (DIRTY_BREATH_MIN + n.dirtyChangeRatio * (DIRTY_BREATH_MAX - DIRTY_BREATH_MIN)) + n.phase)
+        : 1;
       if (!dense) {
         // Wave: a persistent "still part of the latest commit" indicator, shown only on touched
         // particles. Visibility per ring is fixed (each ring still fades as it expands outward,
@@ -748,18 +901,29 @@
         ctx.fill();
       }
 
-      if (emphasize && !dense) {
-        ctx.shadowBlur = 20;
-        ctx.shadowColor = `rgb(${rgbStr})`;
+      // Particle core: solid disc, or an "electron cloud" radial gradient (debug toggle to compare
+      // look/perf) — the gradient fades a soft, fuzzy edge instead of a hard circle boundary. Capped
+      // at the particle's own radius (not beyond) so it can never visually bleed onto a neighboring
+      // particle, however close — same reasoning as dropping shadowBlur for the hover ring above.
+      // createRadialGradient is a real per-frame cost (recomputed every particle, every frame,
+      // unlike a cached sprite), so this is exactly the tradeoff worth eyeballing.
+      const CLOUD_MODE = true;
+      if (CLOUD_MODE) {
+        const cloudR = r * twinkle;
+        const cloudGrad = ctx.createRadialGradient(sx, sy, 0, sx, sy, cloudR);
+        cloudGrad.addColorStop(0, coreColor(n.color, n.intensity));
+        cloudGrad.addColorStop(0.45, `rgba(${rgbStr},0.6)`);
+        cloudGrad.addColorStop(1, `rgba(${rgbStr},0)`);
+        ctx.beginPath();
+        ctx.arc(sx, sy, cloudR, 0, Math.PI * 2);
+        ctx.fillStyle = cloudGrad;
+        ctx.fill();
       } else {
-        ctx.shadowBlur = 0;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r * twinkle, 0, Math.PI * 2);
+        ctx.fillStyle = coreColor(n.color, n.intensity);
+        ctx.fill();
       }
-
-      // Particle side: the white-hot core highlight
-      ctx.beginPath();
-      ctx.arc(sx, sy, r * twinkle, 0, Math.PI * 2);
-      ctx.fillStyle = coreColor(n.color, n.intensity);
-      ctx.fill();
 
       // Touched-state flip: a discrete event (see refreshTouchedFiles), so it flashes as an
       // expanding ring rather than blending in with the continuous twinkle/glow above
@@ -772,10 +936,23 @@
         ctx.stroke();
       }
 
+      // Hover/select highlight: a precise ring right at the particle's own edge — no shadowBlur,
+      // no gradient. shadowBlur's "glow" used to bleed onto whatever particle happened to be
+      // geometrically close by (regardless of any actual relationship to the hovered one), which
+      // read as unrelated neighbors "lighting up together"; a tight stroke on the particle's own
+      // path can't spill onto anyone else no matter how close two particles sit on screen.
+      if (n.id === hoveredId && n.id !== selectedId) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, r * twinkle + 2, 0, Math.PI * 2);
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = `rgba(${rgbStr},0.9)`;
+        ctx.stroke();
+      }
       if (n.id === selectedId) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, r * twinkle + 2, 0, Math.PI * 2);
         ctx.lineWidth = 2;
         ctx.strokeStyle = '#ffffff';
-        ctx.shadowBlur = 0;
         ctx.stroke();
       }
     }
@@ -1517,6 +1694,7 @@
     gitRepo = data.gitRepo;
     nodeById = new Map(nodes.map((n) => [n.id, n]));
     edgeKeys = new Set(edges.map((e) => e.source + '=>' + e.target));
+    rebuildChainSprings();
 
     rootLabel.textContent = `${nodes.length} particles · ${edges.length} strings${gitRepo ? ' · git connected' : ''}`;
     statsEl.textContent = `Max degree: ${data.maxDegree}`;
