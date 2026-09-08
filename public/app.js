@@ -415,26 +415,36 @@
     const DRAG_K = 1; // above DRAG_THRESHOLD, the excess speed gets squashed toward an asymptote of DRAG_THRESHOLD + 1/DRAG_K
     const CROWD_K = 0.08; // how hard local crowding damps extra — see crowdDamping below
 
-    // Repulsion + gravity: only compare within the same cell and neighboring cells
+    // Repulsion + gravity: only compare within the same cell and neighboring cells.
+    // Each unordered pair (n, other) is computed exactly once — n.id < other.id, rather than once
+    // per node as before — and the result applied to BOTH sides via Newton's third law (equal and
+    // opposite). The old per-node version silently redid every movable-movable interaction twice
+    // (once from each side, since both nodes' own loops independently rediscovered the same pair);
+    // this halves that loop's cost with no change to the resulting forces. Accumulate into scratch
+    // fields on the node itself rather than a side Map — cheap to add/reset, no per-frame lookup.
     for (const n of nodes) {
-      if (n.fixed || isHistoryHidden(n)) continue;
+      n._fx = 0;
+      n._fy = 0;
+      n._neighborCount = 0; // how many other particles are within interaction range right now — see crowdDamping below
+    }
+    for (const n of nodes) {
+      if (isHistoryHidden(n)) continue;
       const gx = Math.floor(n.x / cellSize);
       const gy = Math.floor(n.y / cellSize);
-      let fx = 0, fy = 0;
-      let neighborCount = 0; // how many other particles are within interaction range right now — see crowdDamping below
       for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {
           const arr = grid.get((gx + dx) + ',' + (gy + dy));
           if (!arr) continue;
           for (const other of arr) {
-            if (other === n) continue;
+            if (n.id >= other.id) continue; // dedup: this pair is only ever processed from the smaller-id side
             let ddx = n.x - other.x;
             let ddy = n.y - other.y;
             let distSq = ddx * ddx + ddy * ddy;
             if (distSq < 1) distSq = 1;
             const dist = Math.sqrt(distSq);
             if (dist > cellSize * 1.5) continue;
-            neighborCount++;
+            n._neighborCount++;
+            other._neighborCount++;
             // Repulsion is exponential-in-overlap (Born-Mayer style), not 1/r^2 (Coulomb-style):
             // it's finite everywhere, never infinite even fully overlapped, so dragging one particle
             // directly onto another can't spike the force to an unbounded ceiling in a single frame.
@@ -457,18 +467,26 @@
             const overlap = minDist - dist; // > 0 once clouds overlap, < 0 while still apart
             const decayLen = minDist * REPULSE_DECAY_FRAC;
             const force = REPULSE_K * charge(n) * charge(other) * Math.exp(overlap / decayLen);
-            fx += (ddx / dist) * force;
-            fy += (ddy / dist) * force;
             // Real gravity, F = G*m1*m2/r² — unlike the gravity-well grid warp (a pure visual
             // effect that never touches particle positions), this actually pulls particles
             // toward each other, scaled by BOTH particles' massFactor. Kept to the same
             // neighbor-only range as repulsion above (not a true O(n²) all-pairs force).
             const g = (GRAVITY * massFactor(n) * massFactor(other)) / distSq;
-            fx -= (ddx / dist) * g;
-            fy -= (ddy / dist) * g;
+            // Net force along the n->other axis (ddx/ddy point from other to n): +force pushes n
+            // away from other, -g pulls n toward other. other's own share is exactly the opposite.
+            const pairFx = (ddx / dist) * (force - g);
+            const pairFy = (ddy / dist) * (force - g);
+            n._fx += pairFx;
+            n._fy += pairFy;
+            other._fx -= pairFx;
+            other._fy -= pairFy;
           }
         }
       }
+    }
+    for (const n of nodes) {
+      if (n.fixed || isHistoryHidden(n)) continue;
+      let fx = n._fx, fy = n._fy;
       // pull back toward the center of its own nebula
       if (true) {
         fx += (n.cx - n.x) * CENTER_PULL;
@@ -482,7 +500,7 @@
       // compound the most, so it's also where movement should feel the most damped/viscous, not
       // move at the same speed as an isolated pair drifting in open space. 1/(1+CROWD_K*neighborCount)
       // is barely noticeable with a couple of neighbors and increasingly aggressive in a dense knot.
-      const crowdDamping = 1 / (1 + CROWD_K * neighborCount);
+      const crowdDamping = 1 / (1 + CROWD_K * n._neighborCount);
       n.vx = (n.vx + fx / mf) * DAMPING * crowdDamping;
       n.vy = (n.vy + fy / mf) * DAMPING * crowdDamping;
     }
