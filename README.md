@@ -32,14 +32,16 @@ Once started, the terminal prints an `http://localhost:4550` link — open it in
 
 ## Current scope (MVP)
 
-- Dependency resolution covers JS/JSX/TS/TSX/MJS/CJS, Python, Dart, Java, Go, and Rust (one resolver
-  module per language under `src/resolvers/`), but it's regex-based, not a real function-level call
-  graph, and each language has its own accepted gaps: JS/Python/Dart/Rust only resolve **relative**
-  import paths, not `node_modules`/`package:`/crate-external packages; Java also recognizes
-  Spring/JSR-330 dependency injection (`@Autowired`/`@Inject`/`@Resource` fields and constructors) but
-  skips `import static` and wildcard imports; Go resolves package imports by suffix-matching against
-  the repo's own directories (no `go.mod` module-prefix reading); Rust only follows `mod name;`
-  file-inclusion declarations, not `use` paths.
+- Dependency resolution covers JS/JSX/TS/TSX/MJS/CJS, Python, Dart, Java, Go, Rust, and HTML (one
+  resolver module per language under `src/resolvers/`), but it's regex-based, not a real
+  function-level call graph, and each language has its own accepted gaps: JS/Python/Dart/Rust only
+  resolve **relative** import paths, not `node_modules`/`package:`/crate-external packages; Java
+  also recognizes Spring/JSR-330 dependency injection (`@Autowired`/`@Inject`/`@Resource` fields and
+  constructors) but skips `import static` and wildcard imports; Go resolves package imports by
+  suffix-matching against the repo's own directories (no `go.mod` module-prefix reading); Rust only
+  follows `mod name;` file-inclusion declarations, not `use` paths; HTML only follows
+  `<script src="...">` tags (not `<link>`/`<img>`/etc.) and skips absolute/CDN URLs, which is how
+  this project's own `public/index.html` -> `app.js`/`audio.js`/`hands.js` edges show up.
 - Diff/log come from shelling out to `git diff` / `git log` locally, and only work when the directory is a git repo.
 - Large directories (thousands of files) use a grid approximation for inter-particle repulsion to avoid O(n²), but there's no further optimization beyond viewport culling (e.g. WebGL), so very large file counts may still drop frames.
 

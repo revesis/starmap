@@ -51,9 +51,11 @@ starmap [dir] [--port 4550] [--https]
     dependency injection (`@Autowired`/`@Inject`/`@Resource` fields and `@Autowired` constructor
     parameters) as edges, since DI wires a collaborator by type with no `import` at all when both
     classes share a package — the captured type name reuses the same suffix-match `resolve()` as
-    a normal import, just unqualified. These are known/accepted scope limits (see README "Current
-    scope"). Adding a language means adding one file to `src/resolvers/`, not extending a shared
-    regex list.
+    a normal import, just unqualified. `html.js` only follows `<script src="...">` (not
+    `<link>`/`<img>`/etc), skipping absolute/CDN URLs, which is how the frontend's own
+    `public/index.html` -> `app.js`/`audio.js`/`hands.js` edges show up in the graph. These are
+    known/accepted scope limits (see README "Current scope"). Adding a language means adding one
+    file to `src/resolvers/`, not extending a shared regex list.
   - `computeTouchedByLastCommit` shells out to `git log -n 1 --name-only` to get a per-file boolean
     (`n.touched`, not a graded score) used for jitter and as an ambient sound intensity input.
 - `src/server.js` — `createRequestHandler(rootDir)` is shared by both HTTP and HTTPS servers. Routes:

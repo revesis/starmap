@@ -12,6 +12,7 @@ const resolvers = [
   require('./java'),
   require('./go'),
   require('./rust'),
+  require('./html'),
 ];
 
 const byExt = new Map();
