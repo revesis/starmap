@@ -694,7 +694,7 @@
     // Chain stiffness ("bond angle" approximation): straighten out A -> B -> C import chains by
     // springing A directly to C at CHAIN_SPRING_LEN, instead of letting them coil up under
     // repulsion/gravity alone — see rebuildChainSprings for why this rest length works.
-    if (true) {
+    if (false) {
       for (const cs of chainSprings) {
         const a = nodeById.get(cs.a);
         const b = nodeById.get(cs.b);
