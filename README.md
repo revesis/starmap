@@ -50,3 +50,5 @@ Once started, the terminal prints an `http://localhost:4550` link — open it in
 - Wire up tree-sitter for a primary language to get a real function-call graph (more expensive, add if needed)
 - Switch to WebGL rendering once file counts get too large
 - Highlight a particle's full dependency chain when it's clicked
+
+<noscript><a href="https://liberapay.com/revesis/donate"><img alt="Donate using Liberapay" src="https://liberapay.com/assets/widgets/donate.svg"></a></noscript>
