@@ -51,5 +51,6 @@ Once started, the terminal prints an `http://localhost:4550` link — open it in
 - Switch to WebGL rendering once file counts get too large
 - Highlight a particle's full dependency chain when it's clicked
 
-<noscript><a href="https://liberapay.com/revesis/donate"><img alt="Donate using Liberapay" src="https://liberapay.com/assets/widgets/donate.svg"></a></noscript>
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/S6S6WBTNB)
+| Coin | Network | Address |
+| :--- | :--- | :--- |
+| **SOL** | Solana | `GnXfjr5Kq4tpijwfeMbtnqicLFptXXP5rV79axB1M6F5` |
