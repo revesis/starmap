@@ -40,12 +40,16 @@ starmap [dir] [--port 4550] [--https]
   - Dependency resolution is regex-based, one module per language under `src/resolvers/`
     (`javascript.js`, `python.js`, `dart.js`, `java.js`, `go.js`, `rust.js`, dispatched by extension via
     `src/resolvers/index.js`'s `byExt` map; shared path-join/extension-search/index-lookup logic
-    lives in `resolve-utils.js`). Most resolve **relative paths** only — no `node_modules`/`package:`
+    lives in `resolve-utils.js`). Most resolve **relative paths** only — no `node_modules`
     resolution, no real call graph; `java.js`/`go.js` are the exceptions, matching a fully-qualified
     import path as a *suffix* against the repo's files/directories instead (`go.js` also resolves a
     whole package/directory down to one representative file, since a Go import names a package —
     several files — not one file), since neither language's imports are relative to the importing
-    file at all. `rust.js` only follows `mod name;` file-inclusion declarations, not `use` paths
+    file at all. `dart.js` resolves relative imports as usual, plus same-package `package:<name>/x.dart`
+    imports by mapping straight to `lib/x.dart` (the Dart/Flutter convention) without checking that
+    `<name>` actually matches this repo's pubspec.yaml — a cross-package coincidence collision is
+    the accepted gap, same trade-off as java.js/go.js's suffix matching. `rust.js` only follows
+    `mod name;` file-inclusion declarations, not `use` paths
     (resolving `use crate::a::b::Item` needs simulating the whole module tree just to tell
     whether the last segment is a module or an item). `java.js` also recognizes Spring/JSR-330
     dependency injection (`@Autowired`/`@Inject`/`@Resource` fields and `@Autowired` constructor

@@ -34,8 +34,10 @@ Once started, the terminal prints an `http://localhost:4550` link — open it in
 
 - Dependency resolution covers JS/JSX/TS/TSX/MJS/CJS, Python, Dart, Java, Go, Rust, and HTML (one
   resolver module per language under `src/resolvers/`), but it's regex-based, not a real
-  function-level call graph, and each language has its own accepted gaps: JS/Python/Dart/Rust only
-  resolve **relative** import paths, not `node_modules`/`package:`/crate-external packages; Java
+  function-level call graph, and each language has its own accepted gaps: JS/Python/Rust only
+  resolve **relative** import paths, not `node_modules`/crate-external packages; Dart also resolves
+  same-package `package:<name>/x.dart` imports to `lib/x.dart` (without checking `<name>` against
+  pubspec.yaml, so a same-subpath collision with an unrelated external package is possible); Java
   also recognizes Spring/JSR-330 dependency injection (`@Autowired`/`@Inject`/`@Resource` fields and
   constructors) but skips `import static` and wildcard imports; Go resolves package imports by
   suffix-matching against the repo's own directories (no `go.mod` module-prefix reading); Rust only
