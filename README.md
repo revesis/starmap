@@ -63,3 +63,5 @@ Once started, the terminal prints an `http://localhost:4550` link — open it in
 | **ETH / USDT / USDC** | Polygon (POL) | `0x18e92ffcc9e322cb6b65c393932ab4ca36518980` <br>*(Recommended for small donations, ultra-low fees)* |
 | **USDT** | TRON (TRC20) | `TJ5vZ4rBhgzQzvWHgjZRyhVoaKvkz7hUzt` <br>*(Supports Exchanges & TronLink)* |
 | **SOL / USDT / USDC** | Solana | `GnXfjr5Kq4tpijwfeMbtnqicLFptXXP5rV79axB1M6F5` |
+
+[🤲🥀](https://github.com/sponsors/revesis?o=esb)
